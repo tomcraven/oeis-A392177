@@ -3,6 +3,18 @@ name = "red_black_knights"
 version = "0.1.0"
 edition = "2024"
 
+[lib]
+name = "red_black_knights"
+path = "src/lib.rs"
+
+[[bin]]
+name = "red_black_knights"
+path = "src/main.rs"
+
+[[bin]]
+name = "time_sim"
+path = "src/bin/time_sim.rs"
+
 [dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_asset",
@@ -32,6 +44,13 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
+
+bevy_egui = { version = "0.39", default-features = false, features = [
+    "default_fonts",
+    "render",
+] }
+
+[target.'cfg(not(target_family = "wasm"))'.dependencies]
 dirs = "6"
 bevy_egui = { version = "0.39", default-features = false, features = [
     "default_fonts",
@@ -43,6 +62,10 @@ bevy_egui = { version = "0.39", default-features = false, features = [
 [target.'cfg(target_os = "linux")'.dependencies]
 bevy = { version = "0.18.1", default-features = false, features = ["x11", "wayland"] }
 
+[target.'cfg(target_family = "wasm")'.dependencies]
+getrandom = { version = "0.3", features = ["wasm_js"] }
+getrandom_04 = { package = "getrandom", version = "0.4", features = ["wasm_js"] }
+
 [profile.dev]
 opt-level = 1
 
@@ -52,3 +75,13 @@ opt-level = 3
 [profile.release]
 lto = "thin"
 codegen-units = 1
+
+[profile.wasm-release]
+inherits = "release"
+opt-level = "s"
+strip = "debuginfo"
+
+[profile.wasm-release-fast]
+inherits = "release"
+opt-level = 3
+strip = "debuginfo"

@@ -1,7 +1,9 @@
 use crate::model::{ArmyId, GameDefinition};
 use crate::spiral::{index_to_xy, spiral_step, xy_to_index};
 use bevy::prelude::{FromWorld, Resource, World};
-use std::time::{Duration, Instant};
+use std::time::Duration;
+
+use bevy::platform::time::Instant;
 
 const EMPTY_ARMY: ArmyId = usize::MAX;
 
