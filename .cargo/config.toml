@@ -1,0 +1,4 @@
+[alias]
+rund = "run --features bevy/dynamic_linking"
+buildd = "build --features bevy/dynamic_linking"
+testd = "test --features bevy/dynamic_linking"
