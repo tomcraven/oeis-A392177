@@ -70,28 +70,28 @@ fn main() {
 fn bench_cases() -> [BenchCase; 5] {
     [
         BenchCase {
-            name: "red_black_knights",
-            def: GameDefinition::red_black_knights,
+            name: "knight_2_pairwise",
+            def: GameDefinition::knight_2_pairwise,
             turns: TURNS,
         },
         BenchCase {
-            name: "three_knights",
-            def: GameDefinition::three_knights,
+            name: "knight_3_clique",
+            def: GameDefinition::knight_3_clique,
             turns: TURNS,
         },
         BenchCase {
-            name: "four_classic_leapers",
-            def: GameDefinition::four_classic_leapers,
+            name: "leaper_4_mixed_clique",
+            def: GameDefinition::leaper_4_mixed_clique,
             turns: TURNS,
         },
         BenchCase {
-            name: "six_guards",
-            def: GameDefinition::six_guards,
+            name: "guard_6_clique",
+            def: GameDefinition::guard_6_clique,
             turns: TURNS,
         },
         BenchCase {
-            name: "fusion_piece_freeforall",
-            def: GameDefinition::fusion_piece_freeforall,
+            name: "chimera_3_clique",
+            def: GameDefinition::chimera_3_clique,
             turns: TURNS,
         },
     ]

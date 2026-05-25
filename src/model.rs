@@ -150,152 +150,77 @@ pub struct GameDefinition {
 
 impl Default for GameDefinition {
     fn default() -> Self {
-        Self::red_black_knights()
+        Self::knight_2_pairwise()
     }
 }
 
 impl GameDefinition {
-    pub fn red_black_knights() -> Self {
-        let knight = PieceDef::knight();
-        Self {
-            armies: vec![
-                Army {
-                    name: "Black".into(),
-                    color: Color::srgb(0.15, 0.15, 0.2),
-                    piece: knight.clone(),
-                    blocked_by: vec![1],
-                },
-                Army {
-                    name: "Red".into(),
-                    color: Color::srgb(0.85, 0.12, 0.12),
-                    piece: knight,
-                    blocked_by: vec![0],
-                },
-            ],
-            turn_order: vec![0, 1],
-        }
+    pub fn knight_2_pairwise() -> Self {
+        pairwise(
+            "knight_0",
+            PieceDef::knight(),
+            Color::srgb(0.15, 0.15, 0.2),
+            "knight_1",
+            PieceDef::knight(),
+            Color::srgb(0.85, 0.12, 0.12),
+        )
     }
 
-    pub fn three_knights() -> Self {
-        let k = PieceDef::knight();
-        Self {
-            armies: vec![
-                army(
-                    "Violet",
-                    Color::srgb(0.55, 0.2, 0.85),
-                    k.clone(),
-                    vec![1, 2],
-                ),
-                army("Amber", Color::srgb(0.95, 0.65, 0.1), k.clone(), vec![0, 2]),
-                army("Teal", Color::srgb(0.1, 0.75, 0.7), k, vec![0, 1]),
-            ],
-            turn_order: vec![0, 1, 2],
-        }
+    pub fn knight_3_clique() -> Self {
+        clique("knight", PieceDef::knight(), 3)
     }
 
-    pub fn four_knights() -> Self {
-        let k = PieceDef::knight();
-        Self {
-            armies: vec![
-                army(
-                    "North",
-                    Color::srgb(0.2, 0.35, 0.9),
-                    k.clone(),
-                    all_but(0, 4),
-                ),
-                army(
-                    "East",
-                    Color::srgb(0.9, 0.25, 0.2),
-                    k.clone(),
-                    all_but(1, 4),
-                ),
-                army(
-                    "South",
-                    Color::srgb(0.2, 0.75, 0.35),
-                    k.clone(),
-                    all_but(2, 4),
-                ),
-                army("West", Color::srgb(0.85, 0.75, 0.15), k, all_but(3, 4)),
-            ],
-            turn_order: vec![0, 1, 2, 3],
-        }
+    pub fn knight_4_clique() -> Self {
+        clique("knight", PieceDef::knight(), 4)
     }
 
-    pub fn five_knights_ring() -> Self {
-        let k = PieceDef::knight();
-        let n = 5;
-        Self {
-            armies: (0..n)
-                .map(|i| {
-                    army(
-                        &format!("Knight {i}"),
-                        hue(i, n),
-                        k.clone(),
-                        (0..n).filter(|&j| j != i).collect(),
-                    )
-                })
-                .collect(),
-            turn_order: (0..n).collect(),
-        }
+    pub fn knight_5_clique() -> Self {
+        clique("knight", PieceDef::knight(), 5)
     }
 
-    pub fn rook_vs_bishop() -> Self {
+    pub fn knight_6_clique() -> Self {
+        clique("knight", PieceDef::knight(), 6)
+    }
+
+    pub fn wazir_ferz_2_pairwise() -> Self {
+        pairwise(
+            "wazir_0",
+            PieceDef::wazir(),
+            Color::srgb(0.25, 0.25, 0.35),
+            "ferz_1",
+            PieceDef::ferz(),
+            Color::srgb(0.9, 0.5, 0.15),
+        )
+    }
+
+    pub fn king_knight_2_pairwise() -> Self {
+        pairwise(
+            "king_0",
+            PieceDef::king(),
+            Color::srgb(0.85, 0.8, 0.2),
+            "knight_1",
+            PieceDef::knight(),
+            Color::srgb(0.2, 0.2, 0.25),
+        )
+    }
+
+    pub fn wazir_ferz_knight_3_clique() -> Self {
         Self {
             armies: vec![
                 army(
-                    "Rook",
-                    Color::srgb(0.25, 0.25, 0.35),
-                    PieceDef::wazir(),
-                    vec![1],
-                ),
-                army(
-                    "Bishop",
-                    Color::srgb(0.9, 0.5, 0.15),
-                    PieceDef::ferz(),
-                    vec![0],
-                ),
-            ],
-            turn_order: vec![0, 1],
-        }
-    }
-
-    pub fn king_vs_knight() -> Self {
-        Self {
-            armies: vec![
-                army(
-                    "King",
-                    Color::srgb(0.85, 0.8, 0.2),
-                    PieceDef::king(),
-                    vec![1],
-                ),
-                army(
-                    "Knight",
-                    Color::srgb(0.2, 0.2, 0.25),
-                    PieceDef::knight(),
-                    vec![0],
-                ),
-            ],
-            turn_order: vec![0, 1],
-        }
-    }
-
-    pub fn rook_bishop_knight() -> Self {
-        Self {
-            armies: vec![
-                army(
-                    "Rook",
+                    "wazir_0",
                     Color::srgb(0.35, 0.4, 0.55),
                     PieceDef::wazir(),
                     vec![1, 2],
                 ),
                 army(
-                    "Bishop",
+                    "ferz_1",
                     Color::srgb(0.75, 0.35, 0.85),
                     PieceDef::ferz(),
                     vec![0, 2],
                 ),
                 army(
-                    "Knight",
+                    "knight_2",
                     Color::srgb(0.15, 0.55, 0.35),
                     PieceDef::knight(),
                     vec![0, 1],
@@ -305,29 +230,29 @@ impl GameDefinition {
         }
     }
 
-    pub fn four_classic_leapers() -> Self {
+    pub fn leaper_4_mixed_clique() -> Self {
         Self {
             armies: vec![
                 army(
-                    "Knight",
+                    "knight_0",
                     Color::srgb(0.2, 0.25, 0.3),
                     PieceDef::knight(),
                     vec![1, 2, 3],
                 ),
                 army(
-                    "Camel",
+                    "camel_1",
                     Color::srgb(0.75, 0.45, 0.2),
                     PieceDef::camel(),
                     vec![0, 2, 3],
                 ),
                 army(
-                    "Zebra",
+                    "zebra_2",
                     Color::srgb(0.25, 0.6, 0.75),
                     PieceDef::zebra(),
                     vec![0, 1, 3],
                 ),
                 army(
-                    "Giraffe",
+                    "giraffe_3",
                     Color::srgb(0.55, 0.75, 0.25),
                     PieceDef::giraffe(),
                     vec![0, 1, 2],
@@ -337,59 +262,49 @@ impl GameDefinition {
         }
     }
 
-    pub fn hippogriff_duel() -> Self {
-        let h = PieceDef::hippogriff();
-        Self {
-            armies: vec![
-                army(
-                    "Hippogriff A",
-                    Color::srgb(0.5, 0.15, 0.65),
-                    h.clone(),
-                    vec![1],
-                ),
-                army("Hippogriff B", Color::srgb(0.15, 0.55, 0.5), h, vec![0]),
-            ],
-            turn_order: vec![0, 1],
-        }
+    pub fn hippogriff_2_pairwise() -> Self {
+        pairwise(
+            "hippogriff_0",
+            PieceDef::hippogriff(),
+            Color::srgb(0.5, 0.15, 0.65),
+            "hippogriff_1",
+            PieceDef::hippogriff(),
+            Color::srgb(0.15, 0.55, 0.5),
+        )
     }
 
-    pub fn trebuchet_vs_dabbaba() -> Self {
-        Self {
-            armies: vec![
-                army(
-                    "Trebuchet",
-                    Color::srgb(0.6, 0.25, 0.2),
-                    PieceDef::trebuchet(),
-                    vec![1],
-                ),
-                army(
-                    "Dabbaba",
-                    Color::srgb(0.2, 0.45, 0.65),
-                    PieceDef::dabbaba(),
-                    vec![0],
-                ),
-            ],
-            turn_order: vec![0, 1],
-        }
+    pub fn hippogriff_3_clique() -> Self {
+        clique("hippogriff", PieceDef::hippogriff(), 3)
     }
 
-    pub fn orthogonal_pack() -> Self {
+    pub fn trebuchet_dabbaba_2_pairwise() -> Self {
+        pairwise(
+            "trebuchet_0",
+            PieceDef::trebuchet(),
+            Color::srgb(0.6, 0.25, 0.2),
+            "dabbaba_1",
+            PieceDef::dabbaba(),
+            Color::srgb(0.2, 0.45, 0.65),
+        )
+    }
+
+    pub fn orthogonal_3_clique() -> Self {
         Self {
             armies: vec![
                 army(
-                    "Wazir",
+                    "wazir_0",
                     Color::srgb(0.4, 0.4, 0.5),
                     PieceDef::wazir(),
                     vec![1, 2],
                 ),
                 army(
-                    "Dabbaba",
+                    "dabbaba_1",
                     Color::srgb(0.85, 0.35, 0.3),
                     PieceDef::dabbaba(),
                     vec![0, 2],
                 ),
                 army(
-                    "Trebuchet",
+                    "trebuchet_2",
                     Color::srgb(0.3, 0.7, 0.45),
                     PieceDef::trebuchet(),
                     vec![0, 1],
@@ -399,54 +314,106 @@ impl GameDefinition {
         }
     }
 
-    pub fn diagonal_pack() -> Self {
+    pub fn ferz_alfil_2_pairwise() -> Self {
+        pairwise(
+            "ferz_0",
+            PieceDef::ferz(),
+            Color::srgb(0.7, 0.2, 0.55),
+            "alfil_1",
+            PieceDef::alfil(),
+            Color::srgb(0.2, 0.65, 0.75),
+        )
+    }
+
+    pub fn guard_4_clique() -> Self {
+        clique("guard", PieceDef::guard(), 4)
+    }
+
+    pub fn guard_6_clique() -> Self {
+        clique("guard", PieceDef::guard(), 6)
+    }
+
+    pub fn king_3_clique() -> Self {
+        clique("king", PieceDef::king(), 3)
+    }
+
+    pub fn camel_2_pairwise() -> Self {
+        pairwise(
+            "camel_0",
+            PieceDef::camel(),
+            Color::srgb(0.75, 0.45, 0.2),
+            "camel_1",
+            PieceDef::camel(),
+            Color::srgb(0.25, 0.6, 0.75),
+        )
+    }
+
+    pub fn camel_3_clique() -> Self {
+        clique("camel", PieceDef::camel(), 3)
+    }
+
+    pub fn zebra_2_pairwise() -> Self {
+        pairwise(
+            "zebra_0",
+            PieceDef::zebra(),
+            Color::srgb(0.25, 0.6, 0.75),
+            "zebra_1",
+            PieceDef::zebra(),
+            Color::srgb(0.85, 0.35, 0.3),
+        )
+    }
+
+    pub fn zebra_4_clique() -> Self {
+        clique("zebra", PieceDef::zebra(), 4)
+    }
+
+    pub fn dabbaba_2_pairwise() -> Self {
+        pairwise(
+            "dabbaba_0",
+            PieceDef::dabbaba(),
+            Color::srgb(0.85, 0.35, 0.3),
+            "dabbaba_1",
+            PieceDef::dabbaba(),
+            Color::srgb(0.3, 0.7, 0.45),
+        )
+    }
+
+    pub fn dabbaba_3_clique() -> Self {
+        clique("dabbaba", PieceDef::dabbaba(), 3)
+    }
+
+    pub fn alfil_3_clique() -> Self {
+        clique("alfil", PieceDef::alfil(), 3)
+    }
+
+    pub fn knight_camel_2_pairwise() -> Self {
+        pairwise(
+            "knight_0",
+            PieceDef::knight(),
+            Color::srgb(0.2, 0.25, 0.3),
+            "camel_1",
+            PieceDef::camel(),
+            Color::srgb(0.75, 0.45, 0.2),
+        )
+    }
+
+    pub fn king_knight_camel_3_weighted_turns() -> Self {
         Self {
             armies: vec![
                 army(
-                    "Ferz",
-                    Color::srgb(0.7, 0.2, 0.55),
-                    PieceDef::ferz(),
-                    vec![1],
-                ),
-                army(
-                    "Alfil",
-                    Color::srgb(0.2, 0.65, 0.75),
-                    PieceDef::alfil(),
-                    vec![0],
-                ),
-            ],
-            turn_order: vec![0, 1],
-        }
-    }
-
-    pub fn six_guards() -> Self {
-        let g = PieceDef::guard();
-        let n = 6;
-        Self {
-            armies: (0..n)
-                .map(|i| army(&format!("Guard {i}"), hue(i, n), g.clone(), all_but(i, n)))
-                .collect(),
-            turn_order: (0..n).collect(),
-        }
-    }
-
-    pub fn asymmetric_melee() -> Self {
-        Self {
-            armies: vec![
-                army(
-                    "Heavy (King)",
+                    "king_0",
                     Color::srgb(0.75, 0.7, 0.25),
                     PieceDef::king(),
                     vec![1, 2],
                 ),
                 army(
-                    "Swift (Knight)",
+                    "knight_1",
                     Color::srgb(0.2, 0.3, 0.85),
                     PieceDef::knight(),
                     vec![0],
                 ),
                 army(
-                    "Sniper (Camel)",
+                    "camel_2",
                     Color::srgb(0.85, 0.3, 0.35),
                     PieceDef::camel(),
                     vec![0],
@@ -456,31 +423,62 @@ impl GameDefinition {
         }
     }
 
-    pub fn zebra_chaos_four() -> Self {
-        let z = PieceDef::zebra();
-        Self {
-            armies: (0..4)
-                .map(|i| army(&format!("Zebra {i}"), hue(i, 4), z.clone(), all_but(i, 4)))
-                .collect(),
-            turn_order: vec![0, 1, 2, 3],
-        }
+    pub fn chimera_3_clique() -> Self {
+        let chimera = PieceDef::merge(&[PieceDef::knight(), PieceDef::wazir(), PieceDef::alfil()]);
+        clique("chimera", chimera, 3)
     }
 
-    pub fn fusion_piece_freeforall() -> Self {
+    pub fn chimera_4_clique() -> Self {
         let chimera = PieceDef::merge(&[PieceDef::knight(), PieceDef::wazir(), PieceDef::alfil()]);
-        let n = 3;
+        clique("chimera", chimera, 4)
+    }
+
+    pub fn giraffe_2_pairwise() -> Self {
+        pairwise(
+            "giraffe_0",
+            PieceDef::giraffe(),
+            Color::srgb(0.55, 0.75, 0.25),
+            "giraffe_1",
+            PieceDef::giraffe(),
+            Color::srgb(0.75, 0.35, 0.85),
+        )
+    }
+
+    pub fn leaper_5_mixed_clique() -> Self {
         Self {
-            armies: (0..n)
-                .map(|i| {
-                    army(
-                        &format!("Chimera {i}"),
-                        hue(i, n),
-                        chimera.clone(),
-                        all_but(i, n),
-                    )
-                })
-                .collect(),
-            turn_order: vec![0, 1, 2],
+            armies: vec![
+                army(
+                    "knight_0",
+                    Color::srgb(0.2, 0.25, 0.3),
+                    PieceDef::knight(),
+                    all_but(0, 5),
+                ),
+                army(
+                    "camel_1",
+                    Color::srgb(0.75, 0.45, 0.2),
+                    PieceDef::camel(),
+                    all_but(1, 5),
+                ),
+                army(
+                    "zebra_2",
+                    Color::srgb(0.25, 0.6, 0.75),
+                    PieceDef::zebra(),
+                    all_but(2, 5),
+                ),
+                army(
+                    "giraffe_3",
+                    Color::srgb(0.55, 0.75, 0.25),
+                    PieceDef::giraffe(),
+                    all_but(3, 5),
+                ),
+                army(
+                    "hippogriff_4",
+                    Color::srgb(0.5, 0.15, 0.65),
+                    PieceDef::hippogriff(),
+                    all_but(4, 5),
+                ),
+            ],
+            turn_order: vec![0, 1, 2, 3, 4],
         }
     }
 
@@ -491,38 +489,88 @@ impl GameDefinition {
     /// Preset label and constructor for the UI.
     pub fn preset_catalog() -> &'static [(&'static str, fn() -> GameDefinition)] {
         &[
-            ("Red & Black Knights", GameDefinition::red_black_knights),
-            ("3 Knights (mutual threat)", GameDefinition::three_knights),
-            ("4 Knights (cardinal)", GameDefinition::four_knights),
+            ("knight_2_pairwise", GameDefinition::knight_2_pairwise),
+            ("knight_3_clique", GameDefinition::knight_3_clique),
+            ("knight_4_clique", GameDefinition::knight_4_clique),
+            ("knight_5_clique", GameDefinition::knight_5_clique),
+            ("knight_6_clique", GameDefinition::knight_6_clique),
+            ("wazir_ferz_2_pairwise", GameDefinition::wazir_ferz_2_pairwise),
+            ("king_knight_2_pairwise", GameDefinition::king_knight_2_pairwise),
             (
-                "5 Knights (all block all)",
-                GameDefinition::five_knights_ring,
-            ),
-            ("Rook vs Bishop (1-step)", GameDefinition::rook_vs_bishop),
-            ("King vs Knight", GameDefinition::king_vs_knight),
-            ("Rook + Bishop + Knight", GameDefinition::rook_bishop_knight),
-            (
-                "Knight / Camel / Zebra / Giraffe",
-                GameDefinition::four_classic_leapers,
+                "wazir_ferz_knight_3_clique",
+                GameDefinition::wazir_ferz_knight_3_clique,
             ),
             (
-                "Hippogriff duel (knight+camel)",
-                GameDefinition::hippogriff_duel,
+                "leaper_4_mixed_clique",
+                GameDefinition::leaper_4_mixed_clique,
             ),
-            ("Trebuchet vs Dabbaba", GameDefinition::trebuchet_vs_dabbaba),
-            ("Orthogonal pack (3)", GameDefinition::orthogonal_pack),
             (
-                "Diagonal pack (ferz + alfil)",
-                GameDefinition::diagonal_pack,
+                "leaper_5_mixed_clique",
+                GameDefinition::leaper_5_mixed_clique,
             ),
-            ("6 Guards (king moves)", GameDefinition::six_guards),
-            ("Asymmetric melee (3)", GameDefinition::asymmetric_melee),
-            ("4 Zebras (chaos)", GameDefinition::zebra_chaos_four),
+            ("hippogriff_2_pairwise", GameDefinition::hippogriff_2_pairwise),
+            ("hippogriff_3_clique", GameDefinition::hippogriff_3_clique),
             (
-                "3 Chimeras (fusion leaper)",
-                GameDefinition::fusion_piece_freeforall,
+                "trebuchet_dabbaba_2_pairwise",
+                GameDefinition::trebuchet_dabbaba_2_pairwise,
             ),
+            ("orthogonal_3_clique", GameDefinition::orthogonal_3_clique),
+            ("ferz_alfil_2_pairwise", GameDefinition::ferz_alfil_2_pairwise),
+            ("guard_4_clique", GameDefinition::guard_4_clique),
+            ("guard_6_clique", GameDefinition::guard_6_clique),
+            ("king_3_clique", GameDefinition::king_3_clique),
+            ("camel_2_pairwise", GameDefinition::camel_2_pairwise),
+            ("camel_3_clique", GameDefinition::camel_3_clique),
+            ("zebra_2_pairwise", GameDefinition::zebra_2_pairwise),
+            ("zebra_4_clique", GameDefinition::zebra_4_clique),
+            ("dabbaba_2_pairwise", GameDefinition::dabbaba_2_pairwise),
+            ("dabbaba_3_clique", GameDefinition::dabbaba_3_clique),
+            ("alfil_3_clique", GameDefinition::alfil_3_clique),
+            (
+                "knight_camel_2_pairwise",
+                GameDefinition::knight_camel_2_pairwise,
+            ),
+            ("giraffe_2_pairwise", GameDefinition::giraffe_2_pairwise),
+            (
+                "king_knight_camel_3_weighted_turns",
+                GameDefinition::king_knight_camel_3_weighted_turns,
+            ),
+            ("chimera_3_clique", GameDefinition::chimera_3_clique),
+            ("chimera_4_clique", GameDefinition::chimera_4_clique),
         ]
+    }
+}
+
+fn clique(label: &str, piece: PieceDef, n: usize) -> GameDefinition {
+    GameDefinition {
+        armies: (0..n)
+            .map(|i| {
+                army(
+                    &format!("{label}_{i}"),
+                    hue(i, n),
+                    piece.clone(),
+                    all_but(i, n),
+                )
+            })
+            .collect(),
+        turn_order: (0..n).collect(),
+    }
+}
+
+fn pairwise(
+    label_a: &str,
+    piece_a: PieceDef,
+    color_a: Color,
+    label_b: &str,
+    piece_b: PieceDef,
+    color_b: Color,
+) -> GameDefinition {
+    GameDefinition {
+        armies: vec![
+            army(label_a, color_a, piece_a, vec![1]),
+            army(label_b, color_b, piece_b, vec![0]),
+        ],
+        turn_order: vec![0, 1],
     }
 }
 

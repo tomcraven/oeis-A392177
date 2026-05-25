@@ -373,8 +373,8 @@ mod tests {
     fn golden_cases() -> [GoldenCase; 5] {
         [
             GoldenCase {
-                name: "red_black_knights",
-                def: GameDefinition::red_black_knights,
+                name: "knight_2_pairwise",
+                def: GameDefinition::knight_2_pairwise,
                 checksums: [
                     15_737_156_276_822_775_461,
                     5_149_276_635_673_381_925,
@@ -382,8 +382,8 @@ mod tests {
                 ],
             },
             GoldenCase {
-                name: "three_knights",
-                def: GameDefinition::three_knights,
+                name: "knight_3_clique",
+                def: GameDefinition::knight_3_clique,
                 checksums: [
                     16_115_999_991_126_781_684,
                     10_088_445_098_850_287_540,
@@ -391,8 +391,8 @@ mod tests {
                 ],
             },
             GoldenCase {
-                name: "four_classic_leapers",
-                def: GameDefinition::four_classic_leapers,
+                name: "leaper_4_mixed_clique",
+                def: GameDefinition::leaper_4_mixed_clique,
                 checksums: [
                     5_964_283_847_930_621_157,
                     6_946_720_379_821_596_453,
@@ -400,8 +400,8 @@ mod tests {
                 ],
             },
             GoldenCase {
-                name: "six_guards",
-                def: GameDefinition::six_guards,
+                name: "guard_6_clique",
+                def: GameDefinition::guard_6_clique,
                 checksums: [
                     6_480_521_862_097_834_845,
                     15_603_942_777_120_392_349,
@@ -409,8 +409,8 @@ mod tests {
                 ],
             },
             GoldenCase {
-                name: "fusion_piece_freeforall",
-                def: GameDefinition::fusion_piece_freeforall,
+                name: "chimera_3_clique",
+                def: GameDefinition::chimera_3_clique,
                 checksums: [
                     8_459_319_956_822_578_164,
                     6_307_119_068_148_425_140,
@@ -437,7 +437,7 @@ mod tests {
 
     #[test]
     fn early_red_black_placements() {
-        let def = GameDefinition::red_black_knights();
+        let def = GameDefinition::knight_2_pairwise();
         let mut sim = Simulation::new(&def);
         for _ in 0..6 {
             sim.step_turn(&def);
@@ -450,7 +450,7 @@ mod tests {
 
     #[test]
     fn forbidden_cells_are_cached_per_army() {
-        let def = GameDefinition::red_black_knights();
+        let def = GameDefinition::knight_2_pairwise();
         let mut sim = Simulation::new(&def);
         sim.step_turn(&def);
         sim.step_turn(&def);
@@ -470,7 +470,7 @@ mod tests {
 
     #[test]
     fn red_black_first_sixteen_placements_are_stable() {
-        let def = GameDefinition::red_black_knights();
+        let def = GameDefinition::knight_2_pairwise();
         let sim = run_turns(&def, 16);
 
         assert_eq!(
