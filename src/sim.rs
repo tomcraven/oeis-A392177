@@ -1,18 +1,22 @@
-use std::collections::HashMap;
-
 use crate::model::{ArmyId, GameDefinition};
 use crate::spiral::{spiral_step, xy_to_index};
 use bevy::prelude::{FromWorld, Resource, World};
+use std::time::{Duration, Instant};
+
+const EMPTY_ARMY: ArmyId = usize::MAX;
 
 #[derive(Resource)]
 pub struct Simulation {
-    pub occupancy: HashMap<u32, ArmyId>,
-    occupied_cells: ForbiddenSet,
+    /// Dense by spiral index because simulation placement scans are numeric and monotonic.
+    /// This avoids hashing on every occupied-cell check in the hot loop.
+    pub occupancy: OccupancyGrid,
     /// Per-army attacked cells by armies this army respects.
     forbidden: Vec<ForbiddenSet>,
     threatened_for: Vec<Vec<ArmyId>>,
     pub cursors: Vec<u32>,
     cursor_positions: Vec<(i32, i32)>,
+    /// Rolling cursor into `turn_order`; avoids a modulo in every simulated turn.
+    turn_order_index: usize,
     pub turn_step: usize,
     pub placements: Vec<(u32, ArmyId)>,
 }
@@ -20,12 +24,12 @@ pub struct Simulation {
 impl Simulation {
     pub fn new(def: &GameDefinition) -> Self {
         Self {
-            occupancy: HashMap::new(),
-            occupied_cells: ForbiddenSet::new(),
+            occupancy: OccupancyGrid::new(),
             forbidden: vec![ForbiddenSet::new(); def.armies.len()],
             threatened_for: threatened_for(def),
             cursors: vec![0; def.armies.len()],
             cursor_positions: vec![(0, 0); def.armies.len()],
+            turn_order_index: 0,
             turn_step: 0,
             placements: Vec::new(),
         }
@@ -33,40 +37,73 @@ impl Simulation {
 
     pub fn reset(&mut self, def: &GameDefinition) {
         self.occupancy.clear();
-        self.occupied_cells = ForbiddenSet::new();
         self.forbidden = vec![ForbiddenSet::new(); def.armies.len()];
         self.threatened_for = threatened_for(def);
         self.cursors = vec![0; def.armies.len()];
         self.cursor_positions = vec![(0, 0); def.armies.len()];
+        self.turn_order_index = 0;
         self.turn_step = 0;
         self.placements.clear();
     }
 
     fn place(&mut self, def: &GameDefinition, index: u32, xy: (i32, i32), army_id: ArmyId) {
         self.occupancy.insert(index, army_id);
-        self.record_forbidden(def, index, xy, army_id);
+        self.record_forbidden(def, xy, army_id);
         self.placements.push((index, army_id));
     }
 
-    fn record_forbidden(
-        &mut self,
-        def: &GameDefinition,
-        index: u32,
-        xy: (i32, i32),
-        army_id: ArmyId,
-    ) {
-        self.occupied_cells.insert(index);
+    fn record_forbidden(&mut self, def: &GameDefinition, xy: (i32, i32), army_id: ArmyId) {
         let moves = &def.army(army_id).piece.valid_moves;
         let targets = &self.threatened_for[army_id];
-        if let [target_army] = targets[..] {
-            for &(dx, dy) in moves {
-                self.forbidden[target_army].insert(xy_to_index(xy.0 + dx, xy.1 + dy));
+        // Most presets fan out to 1-5 target armies. Specializing those sizes avoids
+        // re-running xy_to_index per target and removes the tiny inner iterator overhead.
+        match targets[..] {
+            [] => {}
+            [target_army] => {
+                for &(dx, dy) in moves {
+                    self.forbidden[target_army].insert(xy_to_index(xy.0 + dx, xy.1 + dy));
+                }
             }
-        } else {
-            for &(dx, dy) in moves {
-                let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
-                for &target_army in targets {
-                    self.forbidden[target_army].insert(attacked);
+            [first, second] => {
+                for &(dx, dy) in moves {
+                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    self.forbidden[first].insert(attacked);
+                    self.forbidden[second].insert(attacked);
+                }
+            }
+            [first, second, third] => {
+                for &(dx, dy) in moves {
+                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    self.forbidden[first].insert(attacked);
+                    self.forbidden[second].insert(attacked);
+                    self.forbidden[third].insert(attacked);
+                }
+            }
+            [first, second, third, fourth] => {
+                for &(dx, dy) in moves {
+                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    self.forbidden[first].insert(attacked);
+                    self.forbidden[second].insert(attacked);
+                    self.forbidden[third].insert(attacked);
+                    self.forbidden[fourth].insert(attacked);
+                }
+            }
+            [first, second, third, fourth, fifth] => {
+                for &(dx, dy) in moves {
+                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    self.forbidden[first].insert(attacked);
+                    self.forbidden[second].insert(attacked);
+                    self.forbidden[third].insert(attacked);
+                    self.forbidden[fourth].insert(attacked);
+                    self.forbidden[fifth].insert(attacked);
+                }
+            }
+            _ => {
+                for &(dx, dy) in moves {
+                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    for &target_army in targets {
+                        self.forbidden[target_army].insert(attacked);
+                    }
                 }
             }
         }
@@ -74,16 +111,23 @@ impl Simulation {
 
     /// One army takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
-        if def.turn_order.is_empty() {
+        let turn_order_len = def.turn_order.len();
+        if turn_order_len == 0 {
             return false;
         }
-        let army_id = def.turn_order[self.turn_step % def.turn_order.len()];
+        let army_id = def.turn_order[self.turn_order_index];
+        self.turn_order_index += 1;
+        if self.turn_order_index == turn_order_len {
+            self.turn_order_index = 0;
+        }
         self.turn_step += 1;
 
         loop {
             let index = self.cursors[army_id];
             let xy = self.cursor_positions[army_id];
-            if !self.occupied_cells.contains_index(index)
+            // Occupancy and forbidden cells are dense bit/vector lookups; this path is hit
+            // for every scanned spiral cell before a placement succeeds.
+            if !self.occupancy.contains_index(index)
                 && !self.forbidden[army_id].contains_index(index)
             {
                 self.place(def, index, xy, army_id);
@@ -102,12 +146,68 @@ impl Simulation {
         self.cursors.iter().any(|&c| c <= target_index)
     }
 
-    pub fn advance_budget(&mut self, def: &GameDefinition, target_index: u32, max_turns: u32) {
-        let mut turns = 0u32;
-        while self.needs_work(target_index) && turns < max_turns {
+    pub fn advance_to_target(&mut self, def: &GameDefinition, target_index: u32) {
+        while self.needs_work(target_index) {
             self.step_turn(def);
-            turns += 1;
         }
+    }
+
+    pub fn advance_for_duration(
+        &mut self,
+        def: &GameDefinition,
+        target_index: u32,
+        max_duration: Duration,
+    ) {
+        let start = Instant::now();
+        let mut turns_since_check = 0u32;
+        while self.needs_work(target_index) {
+            self.step_turn(def);
+            turns_since_check += 1;
+
+            // Checking the clock every turn costs too much in this hot loop.
+            // Batch the check so the UI still updates while simulation uses most of
+            // the allotted frame time.
+            if turns_since_check == 4_096 {
+                if start.elapsed() >= max_duration {
+                    break;
+                }
+                turns_since_check = 0;
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct OccupancyGrid {
+    /// `EMPTY_ARMY` sentinel keeps membership checks as a single indexed vector read.
+    cells: Vec<ArmyId>,
+}
+
+impl OccupancyGrid {
+    fn new() -> Self {
+        Self { cells: Vec::new() }
+    }
+
+    fn clear(&mut self) {
+        self.cells.clear();
+    }
+
+    fn insert(&mut self, index: u32, army_id: ArmyId) {
+        let index = index as usize;
+        if index >= self.cells.len() {
+            self.cells.resize(index + 1, EMPTY_ARMY);
+        }
+        self.cells[index] = army_id;
+    }
+
+    pub fn get(&self, index: &u32) -> Option<&ArmyId> {
+        let army_id = self.cells.get(*index as usize)?;
+        (*army_id != EMPTY_ARMY).then_some(army_id)
+    }
+
+    fn contains_index(&self, index: u32) -> bool {
+        let index = index as usize;
+        index < self.cells.len() && self.cells[index] != EMPTY_ARMY
     }
 }
 
@@ -291,8 +391,8 @@ mod tests {
         let black_xy = (0, 0);
         let attacked = xy_to_index(black_xy.0 + 1, black_xy.1 + 2);
         assert!(sim.forbidden[1].contains_index(attacked));
-        assert!(sim.occupied_cells.contains_index(0));
-        assert!(sim.occupied_cells.contains_index(1));
+        assert!(sim.occupancy.contains_index(0));
+        assert!(sim.occupancy.contains_index(1));
     }
 
     #[test]

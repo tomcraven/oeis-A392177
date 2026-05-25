@@ -52,7 +52,7 @@ pub fn ui_game_definition(
                         for (label, build) in GameDefinition::preset_catalog() {
                             if ui.button(*label).clicked() {
                                 draft = build();
-                                config_dirty = true;
+                                apply_clicked = true;
                             }
                         }
                     });

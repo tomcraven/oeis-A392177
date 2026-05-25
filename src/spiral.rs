@@ -10,7 +10,8 @@ pub fn index_to_xy(index: u32) -> (i32, i32) {
     let ring = (index.isqrt() + 1) / 2;
     let ring_i = ring as i32;
     let side_len = 2 * ring;
-    let start = (2 * ring - 1).pow(2);
+    let inner_side = 2 * ring - 1;
+    let start = inner_side * inner_side;
     let offset = index - start;
 
     if offset < side_len {
@@ -33,7 +34,8 @@ pub fn xy_to_index(x: i32, y: i32) -> u32 {
     let ring = x.abs().max(y.abs());
     let ring_u = ring as u32;
     let side_len = 2 * ring_u;
-    let start = (2 * ring_u - 1).pow(2);
+    let inner_side = 2 * ring_u - 1;
+    let start = inner_side * inner_side;
 
     let offset = if x == ring && y >= -ring + 1 {
         (y + ring - 1) as u32

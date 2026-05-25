@@ -23,7 +23,7 @@ impl Default for PanCamera {
             pan_speed: 400.0,
             zoom_speed: 0.12,
             min_scale: 0.05,
-            max_scale: 8.0,
+            max_scale: 1024.0,
         }
     }
 }
@@ -83,6 +83,26 @@ pub fn camera_zoom_controls(
             ortho.scale = (ortho.scale * factor).clamp(pan.min_scale, pan.max_scale);
         }
     }
+}
+
+pub fn clamp_camera_zoom_to_texture_limit(
+    viewport: Res<crate::viewport::ViewportState>,
+    window_q: Query<&Window>,
+    mut query: Query<(&PanCamera, &mut Projection), With<Camera2d>>,
+) {
+    let Ok(window) = window_q.single() else {
+        return;
+    };
+    let Ok((pan, mut projection)) = query.single_mut() else {
+        return;
+    };
+    let Projection::Orthographic(ref mut ortho) = *projection else {
+        return;
+    };
+    let safe_max =
+        crate::viewport::max_safe_zoom_out_scale(ortho, window, viewport.left_inset_px);
+    let effective_max = pan.max_scale.min(safe_max);
+    ortho.scale = ortho.scale.clamp(pan.min_scale, effective_max);
 }
 
 pub fn apply_camera_actions(

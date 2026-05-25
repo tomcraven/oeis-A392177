@@ -78,6 +78,11 @@ pub fn draw_spiral_cells(
     };
     let grid_size = grid_texture_size(bounds);
 
+    const GPU_TEXTURE_DIMENSION_LIMIT: u32 = 16_000;
+    if grid_size.x > GPU_TEXTURE_DIMENSION_LIMIT || grid_size.y > GPU_TEXTURE_DIMENSION_LIMIT {
+        return;
+    }
+
     if !viewport.render_dirty && cache.rendered_bounds == Some(bounds) {
         return;
     }

@@ -56,7 +56,11 @@ fn main() {
         )
         .add_systems(
             PostUpdate,
-            camera::camera_zoom_controls.after(write_egui_wants_input_system),
+            (
+                camera::camera_zoom_controls.after(write_egui_wants_input_system),
+                camera::clamp_camera_zoom_to_texture_limit,
+            )
+                .chain(),
         )
         .run();
 }
