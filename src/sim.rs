@@ -1,5 +1,5 @@
 use crate::model::{ArmyId, GameDefinition};
-use crate::spiral::{spiral_step, xy_to_index};
+use crate::spiral::{index_to_xy, spiral_step, xy_to_index};
 use bevy::prelude::{FromWorld, Resource, World};
 use std::time::{Duration, Instant};
 
@@ -122,21 +122,50 @@ impl Simulation {
         }
         self.turn_step += 1;
 
+        let occupancy = &self.occupancy;
+        let forbidden = &self.forbidden[army_id];
+        // Locals avoid re-indexing `cursors`/`cursor_positions` on every scanned cell.
+        let mut cursor = self.cursors[army_id];
+        let mut xy = self.cursor_positions[army_id];
+
         loop {
-            let index = self.cursors[army_id];
-            let xy = self.cursor_positions[army_id];
-            // Occupancy and forbidden cells are dense bit/vector lookups; this path is hit
-            // for every scanned spiral cell before a placement succeeds.
-            if !self.occupancy.contains_index(index)
-                && !self.forbidden[army_id].contains_index(index)
-            {
-                self.place(def, index, xy, army_id);
+            if !occupancy.contains_index(cursor) && !forbidden.contains_index(cursor) {
+                self.cursors[army_id] = cursor;
+                self.cursor_positions[army_id] = xy;
+                self.place(def, cursor, xy, army_id);
                 return true;
             }
 
-            self.cursors[army_id] = self.cursors[army_id].saturating_add(1);
-            self.cursor_positions[army_id] = spiral_step(xy);
-            if self.cursors[army_id] == u32::MAX {
+            let next = cursor + 1;
+            if next == 0 {
+                self.cursors[army_id] = cursor;
+                self.cursor_positions[army_id] = xy;
+                return false;
+            }
+
+            let word_end = ((cursor >> 6) + 1) << 6;
+            if next < word_end && forbidden.forbidden_bits_all_set(next, word_end) {
+                if word_end == 0 {
+                    self.cursors[army_id] = cursor;
+                    self.cursor_positions[army_id] = xy;
+                    return false;
+                }
+                cursor = word_end;
+                xy = index_to_xy(word_end);
+                if cursor == u32::MAX {
+                    self.cursors[army_id] = cursor;
+                    self.cursor_positions[army_id] = xy;
+                    return false;
+                }
+                continue;
+            }
+
+            cursor = next;
+            xy = spiral_step(xy);
+
+            if cursor == u32::MAX {
+                self.cursors[army_id] = cursor;
+                self.cursor_positions[army_id] = xy;
                 return false;
             }
         }
@@ -179,7 +208,6 @@ impl Simulation {
 
 #[derive(Clone, Debug, Default)]
 pub struct OccupancyGrid {
-    /// `EMPTY_ARMY` sentinel keeps membership checks as a single indexed vector read.
     cells: Vec<ArmyId>,
 }
 
@@ -233,6 +261,36 @@ impl ForbiddenSet {
         let word_index = index as usize >> 6;
         word_index < self.words.len() && self.words[word_index] & (1u64 << (index & 63)) != 0
     }
+
+    fn word_bits(&self, word_index: usize) -> u64 {
+        self.words.get(word_index).copied().unwrap_or(0)
+    }
+
+    /// Every index in `[from, to)` has its forbidden bit set.
+    fn forbidden_bits_all_set(&self, from: u32, to: u32) -> bool {
+        range_bits_all_set(|word_index| self.word_bits(word_index), from, to)
+    }
+}
+
+fn range_bits_all_set(word_bits: impl Fn(usize) -> u64, from: u32, to: u32) -> bool {
+    debug_assert!(from < to);
+    let mut index = from;
+    while index < to {
+        let segment_end = (((index >> 6) + 1) << 6).min(to);
+        let shift = index & 63;
+        let len = segment_end - index;
+        let mask = if len >= 64 {
+            u64::MAX
+        } else {
+            (1u64 << len) - 1
+        };
+        let bits = word_bits(index as usize >> 6) >> shift;
+        if (bits & mask) != mask {
+            return false;
+        }
+        index = segment_end;
+    }
+    true
 }
 
 fn threatened_for(def: &GameDefinition) -> Vec<Vec<ArmyId>> {
@@ -360,6 +418,21 @@ mod tests {
                 ],
             },
         ]
+    }
+
+    #[test]
+    fn forbidden_bits_all_set_covers_word_tail() {
+        let mut set = ForbiddenSet::new();
+        for index in 0..64 {
+            set.insert(index);
+        }
+        assert!(set.forbidden_bits_all_set(0, 64));
+        assert!(set.forbidden_bits_all_set(40, 64));
+        assert!(!set.forbidden_bits_all_set(40, 65));
+        for index in 64..128 {
+            set.insert(index);
+        }
+        assert!(set.forbidden_bits_all_set(64, 128));
     }
 
     #[test]

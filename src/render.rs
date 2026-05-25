@@ -4,7 +4,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::CELL_SIZE;
 use crate::model::GameDefinition;
-use crate::sim::Simulation;
+use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
 use crate::viewport::{GridBounds, ViewportState, grid_to_world};
 
@@ -17,7 +17,7 @@ pub struct RenderAssets {
 
 #[derive(Resource, Default)]
 pub struct RenderCache {
-    pub rendered_bounds: Option<crate::viewport::GridBounds>,
+    pub rendered_bounds: Option<GridBounds>,
 }
 
 #[derive(Component)]
@@ -64,7 +64,7 @@ pub fn draw_spiral_cells(
     mut images: ResMut<Assets<Image>>,
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
-    sim: Res<Simulation>,
+    sim: Res<SimulationBridge>,
     mut board_q: Query<(&mut Transform, &mut Sprite), With<BoardTexture>>,
 ) {
     if assets.army_colors.is_empty() {
@@ -96,7 +96,7 @@ pub fn draw_spiral_cells(
         for x in bounds.min_x..=bounds.max_x {
             let px = (x - bounds.min_x) as u32;
             let index = xy_to_index(x, y);
-            let color = if let Some(&army_id) = sim.occupancy.get(&index) {
+            let color = if let Some(&army_id) = sim.display.occupancy.get(&index) {
                 assets
                     .army_colors
                     .get(army_id)
@@ -142,8 +142,8 @@ pub fn draw_spiral_cells(
 
 pub fn grid_texture_size(bounds: GridBounds) -> UVec2 {
     UVec2::new(
-        (bounds.max_x - bounds.min_x + 1).max(1) as u32,
-        (bounds.max_y - bounds.min_y + 1).max(1) as u32,
+        bounds.cell_width().max(1) as u32,
+        bounds.cell_height().max(1) as u32,
     )
 }
 

@@ -5,7 +5,7 @@ use crate::CELL_SIZE;
 use crate::camera::PendingCameraAction;
 use crate::model::{Army, GameDefinition, PieceDef};
 use crate::render::{RenderCache, grid_texture_size};
-use crate::sim::Simulation;
+use crate::sim_worker::SimulationBridge;
 use crate::viewport::ViewportState;
 
 #[derive(Resource, Default)]
@@ -17,7 +17,7 @@ pub struct UiState {
 pub fn ui_game_definition(
     mut contexts: EguiContexts,
     mut def: ResMut<GameDefinition>,
-    mut sim: ResMut<Simulation>,
+    mut sim: ResMut<SimulationBridge>,
     mut ui_state: ResMut<UiState>,
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
@@ -202,11 +202,17 @@ pub fn ui_game_definition(
                         apply_clicked = true;
                     }
 
-                    let min_cursor = sim.cursors.iter().copied().min().unwrap_or(0);
+                    let min_cursor = sim
+                        .display
+                        .cursors
+                        .iter()
+                        .copied()
+                        .min()
+                        .unwrap_or(0);
                     ui.separator();
-                    ui.label(format!("Placements: {}", sim.placements.len()));
+                    ui.label(format!("Placements: {}", sim.display.placements_len));
                     ui.label(format!("Min cursor: {min_cursor}"));
-                    if viewport.simulation_pending {
+                    if viewport.simulation_pending || sim.is_busy() {
                         ui.label(format!("Simulating to index {}", viewport.target_index));
                     }
                     ui.separator();
@@ -245,10 +251,11 @@ pub fn ui_game_definition(
     if apply_clicked {
         dedupe_moves(&mut draft);
         *def = draft.clone();
-        sim.reset(&def);
+        sim.request_reset(def.clone());
         cache.rendered_bounds = None;
         viewport.bounds = None;
         viewport.target_index = 0;
+        viewport.allow_sim_catchup_immediately();
         viewport.simulation_pending = false;
         viewport.render_dirty = true;
         config_dirty = false;

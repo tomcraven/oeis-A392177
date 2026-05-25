@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 use crate::CELL_SIZE;
+use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -19,7 +20,39 @@ pub struct ViewportState {
     pub render_dirty: bool,
     pub simulation_pending: bool,
     pub left_inset_px: f32,
+    /// Frames since visible grid bounds last changed (zoom/pan). Sim catch-up waits until settled.
+    bounds_stable_frames: u32,
+    needs_target_refresh: bool,
 }
+
+impl GridBounds {
+    pub fn cell_width(&self) -> i32 {
+        self.max_x - self.min_x + 1
+    }
+
+    pub fn cell_height(&self) -> i32 {
+        self.max_y - self.min_y + 1
+    }
+
+    pub fn cell_count(&self) -> u64 {
+        self.cell_width().max(0) as u64 * self.cell_height().max(0) as u64
+    }
+}
+
+impl ViewportState {
+    /// Allow simulation to run immediately after a preset reset (no zoom settle wait).
+    pub fn allow_sim_catchup_immediately(&mut self) {
+        self.bounds_stable_frames = BOUNDS_SETTLE_FRAMES;
+        self.needs_target_refresh = true;
+    }
+
+    pub fn is_interactively_moving(&self) -> bool {
+        self.bounds_stable_frames < BOUNDS_SETTLE_FRAMES
+    }
+}
+
+/// Wait this many frames after bounds stop changing before requesting more simulation.
+pub const BOUNDS_SETTLE_FRAMES: u32 = 4;
 
 pub fn world_to_grid(world: Vec2) -> (i32, i32) {
     let x = (world.x / CELL_SIZE).floor() as i32;
@@ -116,8 +149,7 @@ pub fn max_safe_zoom_out_scale(
 }
 
 pub fn sync_simulation_to_viewport(
-    mut sim: ResMut<crate::sim::Simulation>,
-    def: Res<crate::model::GameDefinition>,
+    mut sim: ResMut<SimulationBridge>,
     mut viewport: ResMut<ViewportState>,
     camera_q: Query<(&Transform, &Projection), With<Camera2d>>,
     window_q: Query<&Window>,
@@ -133,20 +165,39 @@ pub fn sync_simulation_to_viewport(
     };
 
     let bounds = viewport_grid_bounds(transform, ortho, window, viewport.left_inset_px);
+    if sim.poll_updates() {
+        viewport.render_dirty = true;
+    }
+
     let bounds_changed = viewport.bounds != Some(bounds);
     if bounds_changed {
         viewport.bounds = Some(bounds);
-        viewport.target_index = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
-        viewport.simulation_pending = true;
-    }
-
-    if !bounds_changed && sim.needs_work(viewport.target_index) {
-        sim.advance_for_duration(&def, viewport.target_index, SIM_FRAME_BUDGET);
-    }
-
-    let still_pending = sim.needs_work(viewport.target_index);
-    if (bounds_changed || viewport.simulation_pending) && !still_pending {
         viewport.render_dirty = true;
+        viewport.bounds_stable_frames = 0;
+        viewport.needs_target_refresh = true;
+
+        let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
+        if new_target != viewport.target_index {
+            viewport.target_index = new_target;
+            sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
+        }
+    } else {
+        viewport.bounds_stable_frames = viewport.bounds_stable_frames.saturating_add(1);
     }
-    viewport.simulation_pending = still_pending;
+
+    let bounds_settled = viewport.bounds_stable_frames >= BOUNDS_SETTLE_FRAMES;
+    if bounds_settled && viewport.needs_target_refresh {
+        let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
+        if new_target != viewport.target_index {
+            viewport.target_index = new_target;
+            sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
+        }
+        viewport.needs_target_refresh = false;
+    }
+    if bounds_settled && sim.needs_work(viewport.target_index) && !sim.is_busy() {
+        sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
+    }
+
+    viewport.simulation_pending =
+        sim.needs_work(viewport.target_index) || sim.is_busy() || !bounds_settled;
 }
