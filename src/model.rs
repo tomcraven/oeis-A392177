@@ -155,6 +155,15 @@ impl Default for GameDefinition {
 }
 
 impl GameDefinition {
+    /// Whether two definitions would run the same simulation and army colors.
+    pub fn same_applied_state(&self, other: &Self) -> bool {
+        self.turn_order == other.turn_order
+            && self.armies.len() == other.armies.len()
+            && self.armies.iter().zip(&other.armies).all(|(a, b)| {
+                a.piece == b.piece && a.blocked_by == b.blocked_by && a.color == b.color
+            })
+    }
+
     pub fn knight_2_pairwise() -> Self {
         pairwise(
             "knight_0",

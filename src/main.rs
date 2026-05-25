@@ -36,9 +36,16 @@ fn main() {
         .init_resource::<RenderCache>()
         .init_resource::<ViewportState>()
         .init_resource::<camera::PendingCameraAction>()
+        .init_resource::<camera::LastSavedCamera>()
         .add_systems(
             Startup,
-            (setup_camera, setup_sim_worker, setup_render_assets, setup_smoke_test),
+            (
+                setup_camera,
+                camera::apply_saved_camera_session.after(setup_camera),
+                setup_sim_worker,
+                setup_render_assets,
+                setup_smoke_test,
+            ),
         )
         .add_systems(EguiPrimaryContextPass, ui_game_definition)
         .add_systems(
@@ -56,6 +63,7 @@ fn main() {
                 camera_controls,
                 camera::camera_zoom_controls.after(write_egui_wants_input_system),
                 camera::clamp_camera_zoom_to_texture_limit,
+                camera::persist_camera_session,
                 sync_simulation_to_viewport,
                 draw_spiral_cells,
             )
