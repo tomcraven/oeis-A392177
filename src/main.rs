@@ -1,6 +1,6 @@
 use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
-use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
+use bevy_egui::{EguiPlugin, EguiPrimaryContextPass, input::write_egui_wants_input_system};
 
 use red_black_knights::camera::{self, camera_controls};
 use red_black_knights::model::GameDefinition;
@@ -53,6 +53,10 @@ fn main() {
                 smoke_test_exit,
             )
                 .chain(),
+        )
+        .add_systems(
+            PostUpdate,
+            camera::camera_zoom_controls.after(write_egui_wants_input_system),
         )
         .run();
 }

@@ -6,7 +6,7 @@ use crate::CELL_SIZE;
 use crate::model::GameDefinition;
 use crate::sim::Simulation;
 use crate::spiral::xy_to_index;
-use crate::viewport::{ViewportState, grid_to_world};
+use crate::viewport::{GridBounds, ViewportState, grid_to_world};
 
 #[derive(Resource)]
 pub struct RenderAssets {
@@ -76,13 +76,14 @@ pub fn draw_spiral_cells(
     let Some(bounds) = viewport.bounds else {
         return;
     };
+    let grid_size = grid_texture_size(bounds);
 
     if !viewport.render_dirty && cache.rendered_bounds == Some(bounds) {
         return;
     }
 
-    let width = (bounds.max_x - bounds.min_x + 1).max(1) as u32;
-    let height = (bounds.max_y - bounds.min_y + 1).max(1) as u32;
+    let width = grid_size.x;
+    let height = grid_size.y;
     let mut data = vec![0; (width * height * 4) as usize];
 
     for y in bounds.min_y..=bounds.max_y {
@@ -125,13 +126,20 @@ pub fn draw_spiral_cells(
         let center = (min + max) * 0.5;
         transform.translation = center.extend(0.0);
         sprite.custom_size = Some(Vec2::new(
-            width as f32 * CELL_SIZE,
-            height as f32 * CELL_SIZE,
+            grid_size.x as f32 * CELL_SIZE,
+            grid_size.y as f32 * CELL_SIZE,
         ));
     }
 
     cache.rendered_bounds = Some(bounds);
     viewport.render_dirty = false;
+}
+
+pub fn grid_texture_size(bounds: GridBounds) -> UVec2 {
+    UVec2::new(
+        (bounds.max_x - bounds.min_x + 1).max(1) as u32,
+        (bounds.max_y - bounds.min_y + 1).max(1) as u32,
+    )
 }
 
 fn empty_image(width: u32, height: u32) -> Image {

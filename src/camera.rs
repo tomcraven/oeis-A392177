@@ -1,5 +1,6 @@
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
+use bevy_egui::input::EguiWantsInput;
 
 use crate::viewport::grid_to_world;
 
@@ -30,10 +31,9 @@ impl Default for PanCamera {
 pub fn camera_controls(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut mouse_wheel: MessageReader<MouseWheel>,
-    mut query: Query<(&mut Transform, &mut Projection, &PanCamera), With<Camera2d>>,
+    mut query: Query<(&mut Transform, &PanCamera), With<Camera2d>>,
 ) {
-    let Ok((mut transform, mut projection, pan)) = query.single_mut() else {
+    let Ok((mut transform, pan)) = query.single_mut() else {
         return;
     };
 
@@ -54,8 +54,26 @@ pub fn camera_controls(
         transform.translation +=
             (delta.normalize() * pan.pan_speed * time.delta_secs()).extend(0.0);
     }
+}
+
+/// Runs after egui updates [`EguiWantsInput`] so scroll over UI does not zoom the board.
+pub fn camera_zoom_controls(
+    egui_wants: Res<EguiWantsInput>,
+    mut mouse_wheel: MessageReader<MouseWheel>,
+    mut query: Query<&mut Projection, With<Camera2d>>,
+    pan_q: Query<&PanCamera, With<Camera2d>>,
+) {
+    let Ok(mut projection) = query.single_mut() else {
+        return;
+    };
+    let Ok(pan) = pan_q.single() else {
+        return;
+    };
 
     for wheel in mouse_wheel.read() {
+        if egui_wants.wants_any_pointer_input() {
+            continue;
+        }
         let scroll = match wheel.unit {
             MouseScrollUnit::Line => wheel.y,
             MouseScrollUnit::Pixel => wheel.y * 0.05,

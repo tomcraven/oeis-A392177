@@ -17,6 +17,7 @@ pub struct ViewportState {
     pub target_index: u32,
     pub render_dirty: bool,
     pub simulation_pending: bool,
+    pub left_inset_px: f32,
 }
 
 pub fn world_to_grid(world: Vec2) -> (i32, i32) {
@@ -33,16 +34,21 @@ pub fn viewport_grid_bounds(
     camera_transform: &Transform,
     ortho: &OrthographicProjection,
     window: &Window,
+    left_inset_px: f32,
 ) -> GridBounds {
-    let half_w = ortho.area.width() * ortho.scale * 0.5;
+    let world_w = ortho.area.width() * ortho.scale;
+    let half_w = world_w * 0.5;
     let half_h = ortho.area.height() * ortho.scale * 0.5;
     let center = camera_transform.translation.truncate();
+    let left_inset_fraction = (left_inset_px / window.width().max(1.0)).clamp(0.0, 0.95);
+    let min_world_x = center.x - half_w + world_w * left_inset_fraction;
+    let max_world_x = center.x + half_w;
 
     let corners = [
-        center + Vec2::new(-half_w, -half_h),
-        center + Vec2::new(half_w, -half_h),
-        center + Vec2::new(-half_w, half_h),
-        center + Vec2::new(half_w, half_h),
+        Vec2::new(min_world_x, center.y - half_h),
+        Vec2::new(max_world_x, center.y - half_h),
+        Vec2::new(min_world_x, center.y + half_h),
+        Vec2::new(max_world_x, center.y + half_h),
     ];
 
     let mut min_x = i32::MAX;
@@ -58,7 +64,6 @@ pub fn viewport_grid_bounds(
     }
 
     let margin = 2;
-    let _ = window;
     GridBounds {
         min_x: min_x - margin,
         max_x: max_x + margin,
@@ -96,7 +101,7 @@ pub fn sync_simulation_to_viewport(
         return;
     };
 
-    let bounds = viewport_grid_bounds(transform, ortho, window);
+    let bounds = viewport_grid_bounds(transform, ortho, window, viewport.left_inset_px);
     let bounds_changed = viewport.bounds != Some(bounds);
     if bounds_changed {
         viewport.bounds = Some(bounds);

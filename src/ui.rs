@@ -4,7 +4,7 @@ use bevy_egui::{EguiContexts, egui};
 use crate::CELL_SIZE;
 use crate::camera::PendingCameraAction;
 use crate::model::{Army, GameDefinition, PieceDef};
-use crate::render::RenderCache;
+use crate::render::{RenderCache, grid_texture_size};
 use crate::sim::Simulation;
 use crate::viewport::ViewportState;
 
@@ -36,7 +36,7 @@ pub fn ui_game_definition(
     let mut config_dirty = ui_state.config_dirty;
     let mut apply_clicked = false;
 
-    egui::SidePanel::left("game_config")
+    let panel_response = egui::SidePanel::left("game_config")
         .default_width(320.0)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
@@ -83,28 +83,13 @@ pub fn ui_game_definition(
                                     config_dirty = true;
                                 }
 
-                                ui.label("Moves (dx, dy)");
-                                let mut remove_move: Option<usize> = None;
-                                for (mi, (dx, dy)) in draft.armies[army_idx]
-                                    .piece
-                                    .valid_moves
-                                    .iter_mut()
-                                    .enumerate()
-                                {
-                                    ui.horizontal(|ui| {
-                                        ui.add(egui::DragValue::new(dx).speed(1));
-                                        ui.add(egui::DragValue::new(dy).speed(1));
-                                        if ui.button("−").clicked() {
-                                            remove_move = Some(mi);
-                                        }
-                                    });
-                                }
-                                if let Some(mi) = remove_move {
-                                    draft.armies[army_idx].piece.valid_moves.remove(mi);
-                                    config_dirty = true;
-                                }
-                                if ui.button("Add move").clicked() {
-                                    draft.armies[army_idx].piece.valid_moves.push((1, 2));
+                                ui.label("Attacked squares");
+                                ui.small("Click cells to toggle moves relative to the piece.");
+                                if move_grid_ui(
+                                    ui,
+                                    army_idx,
+                                    &mut draft.armies[army_idx].piece.valid_moves,
+                                ) {
                                     config_dirty = true;
                                 }
 
@@ -227,10 +212,12 @@ pub fn ui_game_definition(
                     ui.separator();
                     ui.label("Debug");
                     if let Some(bounds) = viewport.bounds {
-                        let width = (bounds.max_x - bounds.min_x + 1).max(1) as u32;
-                        let height = (bounds.max_y - bounds.min_y + 1).max(1) as u32;
-                        ui.label(format!("Grid cells: {width} x {height}"));
-                        ui.label(format!("Render texels: {}", width as u64 * height as u64));
+                        let grid_size = grid_texture_size(bounds);
+                        ui.label(format!("Grid cells: {} x {}", grid_size.x, grid_size.y));
+                        ui.label(format!(
+                            "Render texels: {}",
+                            grid_size.x as u64 * grid_size.y as u64
+                        ));
                         ui.label(format!("Target index: {}", viewport.target_index));
                     } else {
                         ui.label("Grid cells: pending");
@@ -242,11 +229,18 @@ pub fn ui_game_definition(
                         let world_per_screen_px =
                             (ortho.area.width() * ortho.scale) / window.width().max(1.0);
                         let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
+                        let board_width_px =
+                            (window.width() - viewport.left_inset_px).ceil().max(1.0);
+                        let board_pixels =
+                            board_width_px as u64 * window.height().ceil().max(1.0) as u64;
                         ui.label(format!("Zoom scale: {:.3}", ortho.scale));
                         ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
+                        ui.label(format!("Board pixels: {board_pixels}"));
+                        ui.label(format!("Left inset px: {:.0}", viewport.left_inset_px));
                     }
                 });
         });
+    viewport.left_inset_px = panel_response.response.rect.width();
 
     if apply_clicked {
         dedupe_moves(&mut draft);
@@ -269,4 +263,60 @@ fn dedupe_moves(def: &mut GameDefinition) {
         army.piece.valid_moves.sort_by_key(|&(x, y)| (x, y));
         army.piece.valid_moves.dedup();
     }
+}
+
+fn move_grid_ui(ui: &mut egui::Ui, army_idx: usize, moves: &mut Vec<(i32, i32)>) -> bool {
+    let radius = moves
+        .iter()
+        .map(|&(dx, dy)| dx.abs().max(dy.abs()))
+        .max()
+        .unwrap_or(1)
+        .max(4);
+    let cell_size = egui::Vec2::splat(22.0);
+    let mut changed = false;
+
+    ui.push_id(("move_grid", army_idx), |ui| {
+        egui::Grid::new("cells")
+            .min_col_width(cell_size.x)
+            .min_row_height(cell_size.y)
+            .spacing(egui::Vec2::splat(1.0))
+            .show(ui, |ui| {
+                for y in (-radius..=radius).rev() {
+                    for x in -radius..=radius {
+                        if x == 0 && y == 0 {
+                            ui.add_enabled(false, egui::Button::new("P").min_size(cell_size));
+                            continue;
+                        }
+
+                        let move_idx = moves.iter().position(|&m| m == (x, y));
+                        let selected = move_idx.is_some();
+                        let label = if selected { "x" } else { "" };
+                        let mut button = egui::Button::new(label).min_size(cell_size);
+                        if selected {
+                            button = button.fill(egui::Color32::from_rgb(90, 40, 40));
+                        }
+
+                        if ui
+                            .add(button)
+                            .on_hover_text(format!("({x}, {y})"))
+                            .clicked()
+                        {
+                            if let Some(idx) = move_idx {
+                                moves.remove(idx);
+                            } else {
+                                moves.push((x, y));
+                            }
+                            changed = true;
+                        }
+                    }
+                    ui.end_row();
+                }
+            });
+    });
+
+    if changed {
+        moves.sort_by_key(|&(x, y)| (x, y));
+        moves.dedup();
+    }
+    changed
 }
