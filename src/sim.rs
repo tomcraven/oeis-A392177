@@ -57,9 +57,17 @@ impl Simulation {
     ) {
         self.occupied_cells.insert(index);
         let moves = &def.army(army_id).piece.valid_moves;
-        for &target_army in &self.threatened_for[army_id] {
+        let targets = &self.threatened_for[army_id];
+        if let [target_army] = targets[..] {
             for &(dx, dy) in moves {
                 self.forbidden[target_army].insert(xy_to_index(xy.0 + dx, xy.1 + dy));
+            }
+        } else {
+            for &(dx, dy) in moves {
+                let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                for &target_army in targets {
+                    self.forbidden[target_army].insert(attacked);
+                }
             }
         }
     }
@@ -123,9 +131,7 @@ impl ForbiddenSet {
 
     fn contains_index(&self, index: u32) -> bool {
         let word_index = index as usize >> 6;
-        self.words
-            .get(word_index)
-            .is_some_and(|word| word & (1u64 << (index & 63)) != 0)
+        word_index < self.words.len() && self.words[word_index] & (1u64 << (index & 63)) != 0
     }
 }
 
