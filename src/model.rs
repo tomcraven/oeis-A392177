@@ -180,7 +180,12 @@ impl GameDefinition {
         let k = PieceDef::knight();
         Self {
             armies: vec![
-                army("Violet", Color::srgb(0.55, 0.2, 0.85), k.clone(), vec![1, 2]),
+                army(
+                    "Violet",
+                    Color::srgb(0.55, 0.2, 0.85),
+                    k.clone(),
+                    vec![1, 2],
+                ),
                 army("Amber", Color::srgb(0.95, 0.65, 0.1), k.clone(), vec![0, 2]),
                 army("Teal", Color::srgb(0.1, 0.75, 0.7), k, vec![0, 1]),
             ],
@@ -192,9 +197,24 @@ impl GameDefinition {
         let k = PieceDef::knight();
         Self {
             armies: vec![
-                army("North", Color::srgb(0.2, 0.35, 0.9), k.clone(), all_but(0, 4)),
-                army("East", Color::srgb(0.9, 0.25, 0.2), k.clone(), all_but(1, 4)),
-                army("South", Color::srgb(0.2, 0.75, 0.35), k.clone(), all_but(2, 4)),
+                army(
+                    "North",
+                    Color::srgb(0.2, 0.35, 0.9),
+                    k.clone(),
+                    all_but(0, 4),
+                ),
+                army(
+                    "East",
+                    Color::srgb(0.9, 0.25, 0.2),
+                    k.clone(),
+                    all_but(1, 4),
+                ),
+                army(
+                    "South",
+                    Color::srgb(0.2, 0.75, 0.35),
+                    k.clone(),
+                    all_but(2, 4),
+                ),
                 army("West", Color::srgb(0.85, 0.75, 0.15), k, all_but(3, 4)),
             ],
             turn_order: vec![0, 1, 2, 3],
@@ -222,8 +242,18 @@ impl GameDefinition {
     pub fn rook_vs_bishop() -> Self {
         Self {
             armies: vec![
-                army("Rook", Color::srgb(0.25, 0.25, 0.35), PieceDef::wazir(), vec![1]),
-                army("Bishop", Color::srgb(0.9, 0.5, 0.15), PieceDef::ferz(), vec![0]),
+                army(
+                    "Rook",
+                    Color::srgb(0.25, 0.25, 0.35),
+                    PieceDef::wazir(),
+                    vec![1],
+                ),
+                army(
+                    "Bishop",
+                    Color::srgb(0.9, 0.5, 0.15),
+                    PieceDef::ferz(),
+                    vec![0],
+                ),
             ],
             turn_order: vec![0, 1],
         }
@@ -232,8 +262,18 @@ impl GameDefinition {
     pub fn king_vs_knight() -> Self {
         Self {
             armies: vec![
-                army("King", Color::srgb(0.85, 0.8, 0.2), PieceDef::king(), vec![1]),
-                army("Knight", Color::srgb(0.2, 0.2, 0.25), PieceDef::knight(), vec![0]),
+                army(
+                    "King",
+                    Color::srgb(0.85, 0.8, 0.2),
+                    PieceDef::king(),
+                    vec![1],
+                ),
+                army(
+                    "Knight",
+                    Color::srgb(0.2, 0.2, 0.25),
+                    PieceDef::knight(),
+                    vec![0],
+                ),
             ],
             turn_order: vec![0, 1],
         }
@@ -242,9 +282,24 @@ impl GameDefinition {
     pub fn rook_bishop_knight() -> Self {
         Self {
             armies: vec![
-                army("Rook", Color::srgb(0.35, 0.4, 0.55), PieceDef::wazir(), vec![1, 2]),
-                army("Bishop", Color::srgb(0.75, 0.35, 0.85), PieceDef::ferz(), vec![0, 2]),
-                army("Knight", Color::srgb(0.15, 0.55, 0.35), PieceDef::knight(), vec![0, 1]),
+                army(
+                    "Rook",
+                    Color::srgb(0.35, 0.4, 0.55),
+                    PieceDef::wazir(),
+                    vec![1, 2],
+                ),
+                army(
+                    "Bishop",
+                    Color::srgb(0.75, 0.35, 0.85),
+                    PieceDef::ferz(),
+                    vec![0, 2],
+                ),
+                army(
+                    "Knight",
+                    Color::srgb(0.15, 0.55, 0.35),
+                    PieceDef::knight(),
+                    vec![0, 1],
+                ),
             ],
             turn_order: vec![0, 1, 2],
         }
@@ -253,9 +308,24 @@ impl GameDefinition {
     pub fn four_classic_leapers() -> Self {
         Self {
             armies: vec![
-                army("Knight", Color::srgb(0.2, 0.25, 0.3), PieceDef::knight(), vec![1, 2, 3]),
-                army("Camel", Color::srgb(0.75, 0.45, 0.2), PieceDef::camel(), vec![0, 2, 3]),
-                army("Zebra", Color::srgb(0.25, 0.6, 0.75), PieceDef::zebra(), vec![0, 1, 3]),
+                army(
+                    "Knight",
+                    Color::srgb(0.2, 0.25, 0.3),
+                    PieceDef::knight(),
+                    vec![1, 2, 3],
+                ),
+                army(
+                    "Camel",
+                    Color::srgb(0.75, 0.45, 0.2),
+                    PieceDef::camel(),
+                    vec![0, 2, 3],
+                ),
+                army(
+                    "Zebra",
+                    Color::srgb(0.25, 0.6, 0.75),
+                    PieceDef::zebra(),
+                    vec![0, 1, 3],
+                ),
                 army(
                     "Giraffe",
                     Color::srgb(0.55, 0.75, 0.25),
@@ -271,7 +341,12 @@ impl GameDefinition {
         let h = PieceDef::hippogriff();
         Self {
             armies: vec![
-                army("Hippogriff A", Color::srgb(0.5, 0.15, 0.65), h.clone(), vec![1]),
+                army(
+                    "Hippogriff A",
+                    Color::srgb(0.5, 0.15, 0.65),
+                    h.clone(),
+                    vec![1],
+                ),
                 army("Hippogriff B", Color::srgb(0.15, 0.55, 0.5), h, vec![0]),
             ],
             turn_order: vec![0, 1],
@@ -301,7 +376,12 @@ impl GameDefinition {
     pub fn orthogonal_pack() -> Self {
         Self {
             armies: vec![
-                army("Wazir", Color::srgb(0.4, 0.4, 0.5), PieceDef::wazir(), vec![1, 2]),
+                army(
+                    "Wazir",
+                    Color::srgb(0.4, 0.4, 0.5),
+                    PieceDef::wazir(),
+                    vec![1, 2],
+                ),
                 army(
                     "Dabbaba",
                     Color::srgb(0.85, 0.35, 0.3),
@@ -322,8 +402,18 @@ impl GameDefinition {
     pub fn diagonal_pack() -> Self {
         Self {
             armies: vec![
-                army("Ferz", Color::srgb(0.7, 0.2, 0.55), PieceDef::ferz(), vec![1]),
-                army("Alfil", Color::srgb(0.2, 0.65, 0.75), PieceDef::alfil(), vec![0]),
+                army(
+                    "Ferz",
+                    Color::srgb(0.7, 0.2, 0.55),
+                    PieceDef::ferz(),
+                    vec![1],
+                ),
+                army(
+                    "Alfil",
+                    Color::srgb(0.2, 0.65, 0.75),
+                    PieceDef::alfil(),
+                    vec![0],
+                ),
             ],
             turn_order: vec![0, 1],
         }
@@ -370,25 +460,14 @@ impl GameDefinition {
         let z = PieceDef::zebra();
         Self {
             armies: (0..4)
-                .map(|i| {
-                    army(
-                        &format!("Zebra {i}"),
-                        hue(i, 4),
-                        z.clone(),
-                        all_but(i, 4),
-                    )
-                })
+                .map(|i| army(&format!("Zebra {i}"), hue(i, 4), z.clone(), all_but(i, 4)))
                 .collect(),
             turn_order: vec![0, 1, 2, 3],
         }
     }
 
     pub fn fusion_piece_freeforall() -> Self {
-        let chimera = PieceDef::merge(&[
-            PieceDef::knight(),
-            PieceDef::wazir(),
-            PieceDef::alfil(),
-        ]);
+        let chimera = PieceDef::merge(&[PieceDef::knight(), PieceDef::wazir(), PieceDef::alfil()]);
         let n = 3;
         Self {
             armies: (0..n)
@@ -415,19 +494,34 @@ impl GameDefinition {
             ("Red & Black Knights", GameDefinition::red_black_knights),
             ("3 Knights (mutual threat)", GameDefinition::three_knights),
             ("4 Knights (cardinal)", GameDefinition::four_knights),
-            ("5 Knights (all block all)", GameDefinition::five_knights_ring),
+            (
+                "5 Knights (all block all)",
+                GameDefinition::five_knights_ring,
+            ),
             ("Rook vs Bishop (1-step)", GameDefinition::rook_vs_bishop),
             ("King vs Knight", GameDefinition::king_vs_knight),
             ("Rook + Bishop + Knight", GameDefinition::rook_bishop_knight),
-            ("Knight / Camel / Zebra / Giraffe", GameDefinition::four_classic_leapers),
-            ("Hippogriff duel (knight+camel)", GameDefinition::hippogriff_duel),
+            (
+                "Knight / Camel / Zebra / Giraffe",
+                GameDefinition::four_classic_leapers,
+            ),
+            (
+                "Hippogriff duel (knight+camel)",
+                GameDefinition::hippogriff_duel,
+            ),
             ("Trebuchet vs Dabbaba", GameDefinition::trebuchet_vs_dabbaba),
             ("Orthogonal pack (3)", GameDefinition::orthogonal_pack),
-            ("Diagonal pack (ferz + alfil)", GameDefinition::diagonal_pack),
+            (
+                "Diagonal pack (ferz + alfil)",
+                GameDefinition::diagonal_pack,
+            ),
             ("6 Guards (king moves)", GameDefinition::six_guards),
             ("Asymmetric melee (3)", GameDefinition::asymmetric_melee),
             ("4 Zebras (chaos)", GameDefinition::zebra_chaos_four),
-            ("3 Chimeras (fusion leaper)", GameDefinition::fusion_piece_freeforall),
+            (
+                "3 Chimeras (fusion leaper)",
+                GameDefinition::fusion_piece_freeforall,
+            ),
         ]
     }
 }

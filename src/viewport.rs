@@ -1,7 +1,7 @@
 use bevy::prelude::*;
 
-use crate::spiral::xy_to_index;
 use crate::CELL_SIZE;
+use crate::spiral::xy_to_index;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridBounds {
@@ -26,10 +26,7 @@ pub fn world_to_grid(world: Vec2) -> (i32, i32) {
 }
 
 pub fn grid_to_world(x: i32, y: i32) -> Vec2 {
-    Vec2::new(
-        (x as f32 + 0.5) * CELL_SIZE,
-        (y as f32 + 0.5) * CELL_SIZE,
-    )
+    Vec2::new((x as f32 + 0.5) * CELL_SIZE, (y as f32 + 0.5) * CELL_SIZE)
 }
 
 pub fn viewport_grid_bounds(

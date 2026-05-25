@@ -1,6 +1,8 @@
 use bevy::prelude::*;
-use bevy_egui::{egui, EguiContexts};
+use bevy_egui::{EguiContexts, egui};
 
+use crate::CELL_SIZE;
+use crate::camera::PendingCameraAction;
 use crate::model::{Army, GameDefinition, PieceDef};
 use crate::render::RenderCache;
 use crate::sim::Simulation;
@@ -19,6 +21,9 @@ pub fn ui_game_definition(
     mut ui_state: ResMut<UiState>,
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
+    mut camera_actions: ResMut<PendingCameraAction>,
+    camera_q: Query<&Projection, With<Camera2d>>,
+    window_q: Query<&Window>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
@@ -34,180 +39,213 @@ pub fn ui_game_definition(
     egui::SidePanel::left("game_config")
         .default_width(320.0)
         .show(ctx, |ui| {
-            ui.heading("Red & Black Knights");
-            ui.separator();
-
-            ui.collapsing("Presets", |ui| {
-                for (label, build) in GameDefinition::preset_catalog() {
-                    if ui.button(*label).clicked() {
-                        draft = build();
-                        config_dirty = true;
+            egui::ScrollArea::vertical()
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
+                    ui.heading("Red & Black Knights");
+                    if ui.button("Center view").clicked() {
+                        camera_actions.center_view = true;
                     }
-                }
-            });
+                    ui.separator();
 
-            ui.separator();
-            ui.label("Armies");
-
-            let mut remove_army: Option<usize> = None;
-            for army_idx in 0..draft.armies.len() {
-                ui.collapsing(
-                    format!("Army {}: {}", army_idx, draft.armies[army_idx].name),
-                    |ui| {
-                        ui.horizontal(|ui| {
-                            ui.label("Name");
-                            if ui
-                                .text_edit_singleline(&mut draft.armies[army_idx].name)
-                                .changed()
-                            {
-                                config_dirty = true;
-                            }
-                        });
-
-                        let rgb = draft.armies[army_idx].color.to_srgba();
-                        let mut arr = [rgb.red, rgb.green, rgb.blue];
-                        if ui.color_edit_button_rgb(&mut arr).changed() {
-                            draft.armies[army_idx].color = Color::srgb(arr[0], arr[1], arr[2]);
-                            config_dirty = true;
-                        }
-
-                        ui.label("Moves (dx, dy)");
-                        let mut remove_move: Option<usize> = None;
-                        for (mi, (dx, dy)) in draft.armies[army_idx]
-                            .piece
-                            .valid_moves
-                            .iter_mut()
-                            .enumerate()
-                        {
-                            ui.horizontal(|ui| {
-                                ui.add(egui::DragValue::new(dx).speed(1));
-                                ui.add(egui::DragValue::new(dy).speed(1));
-                                if ui.button("−").clicked() {
-                                    remove_move = Some(mi);
-                                }
-                            });
-                        }
-                        if let Some(mi) = remove_move {
-                            draft.armies[army_idx].piece.valid_moves.remove(mi);
-                            config_dirty = true;
-                        }
-                        if ui.button("Add move").clicked() {
-                            draft.armies[army_idx].piece.valid_moves.push((1, 2));
-                            config_dirty = true;
-                        }
-
-                        ui.label("Blocked by");
-                        for other in 0..draft.armies.len() {
-                            if other == army_idx {
-                                continue;
-                            }
-                            let mut blocked = draft.armies[army_idx].blocked_by.contains(&other);
-                            let label = draft.armies[other].name.clone();
-                            if ui.checkbox(&mut blocked, label).changed() {
-                                if blocked {
-                                    if !draft.armies[army_idx].blocked_by.contains(&other) {
-                                        draft.armies[army_idx].blocked_by.push(other);
-                                    }
-                                } else {
-                                    draft.armies[army_idx]
-                                        .blocked_by
-                                        .retain(|&id| id != other);
-                                }
+                    ui.collapsing("Presets", |ui| {
+                        for (label, build) in GameDefinition::preset_catalog() {
+                            if ui.button(*label).clicked() {
+                                draft = build();
                                 config_dirty = true;
                             }
                         }
+                    });
 
-                        if draft.armies.len() > 1 && ui.button("Remove army").clicked() {
-                            remove_army = Some(army_idx);
-                        }
-                    },
-                );
-            }
+                    ui.separator();
+                    ui.label("Armies");
 
-            if let Some(idx) = remove_army {
-                draft.armies.remove(idx);
-                for army in &mut draft.armies {
-                    army.blocked_by.retain(|&id| id != idx);
-                    for b in &mut army.blocked_by {
-                        if *b > idx {
-                            *b -= 1;
-                        }
-                    }
-                }
-                draft.turn_order.retain(|&id| id != idx);
-                for t in &mut draft.turn_order {
-                    if *t > idx {
-                        *t -= 1;
-                    }
-                }
-                config_dirty = true;
-            }
-
-            if ui.button("Add army").clicked() {
-                let id = draft.armies.len();
-                draft.armies.push(Army {
-                    name: format!("Army {id}"),
-                    color: Color::srgb(0.5, 0.5, 0.5),
-                    piece: PieceDef::knight(),
-                    blocked_by: vec![],
-                });
-                draft.turn_order.push(id);
-                config_dirty = true;
-            }
-
-            ui.separator();
-            ui.label("Turn order (round-robin)");
-            let mut new_order = draft.turn_order.clone();
-            egui::ComboBox::from_id_salt("turn_order_editor")
-                .selected_text(format!("{} steps", new_order.len()))
-                .show_ui(ui, |ui| {
-                    for step in 0..new_order.len() {
-                        let current = new_order[step];
-                        egui::ComboBox::from_id_salt(format!("turn_{step}"))
-                            .selected_text(
-                                draft
-                                    .armies
-                                    .get(current)
-                                    .map(|a| a.name.as_str())
-                                    .unwrap_or("?"),
-                            )
-                            .show_ui(ui, |ui| {
-                                for (aid, army) in draft.armies.iter().enumerate() {
+                    let mut remove_army: Option<usize> = None;
+                    for army_idx in 0..draft.armies.len() {
+                        ui.collapsing(
+                            format!("Army {}: {}", army_idx, draft.armies[army_idx].name),
+                            |ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label("Name");
                                     if ui
-                                        .selectable_label(current == aid, &army.name)
-                                        .clicked()
+                                        .text_edit_singleline(&mut draft.armies[army_idx].name)
+                                        .changed()
                                     {
-                                        new_order[step] = aid;
+                                        config_dirty = true;
+                                    }
+                                });
+
+                                let rgb = draft.armies[army_idx].color.to_srgba();
+                                let mut arr = [rgb.red, rgb.green, rgb.blue];
+                                if ui.color_edit_button_rgb(&mut arr).changed() {
+                                    draft.armies[army_idx].color =
+                                        Color::srgb(arr[0], arr[1], arr[2]);
+                                    config_dirty = true;
+                                }
+
+                                ui.label("Moves (dx, dy)");
+                                let mut remove_move: Option<usize> = None;
+                                for (mi, (dx, dy)) in draft.armies[army_idx]
+                                    .piece
+                                    .valid_moves
+                                    .iter_mut()
+                                    .enumerate()
+                                {
+                                    ui.horizontal(|ui| {
+                                        ui.add(egui::DragValue::new(dx).speed(1));
+                                        ui.add(egui::DragValue::new(dy).speed(1));
+                                        if ui.button("−").clicked() {
+                                            remove_move = Some(mi);
+                                        }
+                                    });
+                                }
+                                if let Some(mi) = remove_move {
+                                    draft.armies[army_idx].piece.valid_moves.remove(mi);
+                                    config_dirty = true;
+                                }
+                                if ui.button("Add move").clicked() {
+                                    draft.armies[army_idx].piece.valid_moves.push((1, 2));
+                                    config_dirty = true;
+                                }
+
+                                ui.label("Blocked by");
+                                for other in 0..draft.armies.len() {
+                                    if other == army_idx {
+                                        continue;
+                                    }
+                                    let mut blocked =
+                                        draft.armies[army_idx].blocked_by.contains(&other);
+                                    let label = draft.armies[other].name.clone();
+                                    if ui.checkbox(&mut blocked, label).changed() {
+                                        if blocked {
+                                            if !draft.armies[army_idx].blocked_by.contains(&other) {
+                                                draft.armies[army_idx].blocked_by.push(other);
+                                            }
+                                        } else {
+                                            draft.armies[army_idx]
+                                                .blocked_by
+                                                .retain(|&id| id != other);
+                                        }
                                         config_dirty = true;
                                     }
                                 }
-                            });
+
+                                if draft.armies.len() > 1 && ui.button("Remove army").clicked() {
+                                    remove_army = Some(army_idx);
+                                }
+                            },
+                        );
+                    }
+
+                    if let Some(idx) = remove_army {
+                        draft.armies.remove(idx);
+                        for army in &mut draft.armies {
+                            army.blocked_by.retain(|&id| id != idx);
+                            for b in &mut army.blocked_by {
+                                if *b > idx {
+                                    *b -= 1;
+                                }
+                            }
+                        }
+                        draft.turn_order.retain(|&id| id != idx);
+                        for t in &mut draft.turn_order {
+                            if *t > idx {
+                                *t -= 1;
+                            }
+                        }
+                        config_dirty = true;
+                    }
+
+                    if ui.button("Add army").clicked() {
+                        let id = draft.armies.len();
+                        draft.armies.push(Army {
+                            name: format!("Army {id}"),
+                            color: Color::srgb(0.5, 0.5, 0.5),
+                            piece: PieceDef::knight(),
+                            blocked_by: vec![],
+                        });
+                        draft.turn_order.push(id);
+                        config_dirty = true;
+                    }
+
+                    ui.separator();
+                    ui.label("Turn order (round-robin)");
+                    let mut new_order = draft.turn_order.clone();
+                    egui::ComboBox::from_id_salt("turn_order_editor")
+                        .selected_text(format!("{} steps", new_order.len()))
+                        .show_ui(ui, |ui| {
+                            for step in 0..new_order.len() {
+                                let current = new_order[step];
+                                egui::ComboBox::from_id_salt(format!("turn_{step}"))
+                                    .selected_text(
+                                        draft
+                                            .armies
+                                            .get(current)
+                                            .map(|a| a.name.as_str())
+                                            .unwrap_or("?"),
+                                    )
+                                    .show_ui(ui, |ui| {
+                                        for (aid, army) in draft.armies.iter().enumerate() {
+                                            if ui
+                                                .selectable_label(current == aid, &army.name)
+                                                .clicked()
+                                            {
+                                                new_order[step] = aid;
+                                                config_dirty = true;
+                                            }
+                                        }
+                                    });
+                            }
+                        });
+                    if new_order != draft.turn_order {
+                        draft.turn_order = new_order;
+                        config_dirty = true;
+                    }
+
+                    if draft.turn_order.is_empty() && !draft.armies.is_empty() {
+                        draft.turn_order = (0..draft.armies.len()).collect();
+                    }
+
+                    ui.separator();
+                    if config_dirty {
+                        ui.colored_label(
+                            egui::Color32::YELLOW,
+                            "Config changed — apply to reset sim",
+                        );
+                    }
+                    if ui.button("Apply & reset simulation").clicked() {
+                        apply_clicked = true;
+                    }
+
+                    let min_cursor = sim.cursors.iter().copied().min().unwrap_or(0);
+                    ui.separator();
+                    ui.label(format!("Placements: {}", sim.placements.len()));
+                    ui.label(format!("Min cursor: {min_cursor}"));
+                    if viewport.simulation_pending {
+                        ui.label(format!("Simulating to index {}", viewport.target_index));
+                    }
+                    ui.separator();
+                    ui.label("Debug");
+                    if let Some(bounds) = viewport.bounds {
+                        let width = (bounds.max_x - bounds.min_x + 1).max(1) as u32;
+                        let height = (bounds.max_y - bounds.min_y + 1).max(1) as u32;
+                        ui.label(format!("Grid cells: {width} x {height}"));
+                        ui.label(format!("Render texels: {}", width as u64 * height as u64));
+                        ui.label(format!("Target index: {}", viewport.target_index));
+                    } else {
+                        ui.label("Grid cells: pending");
+                    }
+
+                    if let (Ok(Projection::Orthographic(ortho)), Ok(window)) =
+                        (camera_q.single(), window_q.single())
+                    {
+                        let world_per_screen_px =
+                            (ortho.area.width() * ortho.scale) / window.width().max(1.0);
+                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
+                        ui.label(format!("Zoom scale: {:.3}", ortho.scale));
+                        ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
                     }
                 });
-            if new_order != draft.turn_order {
-                draft.turn_order = new_order;
-                config_dirty = true;
-            }
-
-            if draft.turn_order.is_empty() && !draft.armies.is_empty() {
-                draft.turn_order = (0..draft.armies.len()).collect();
-            }
-
-            ui.separator();
-            if config_dirty {
-                ui.colored_label(egui::Color32::YELLOW, "Config changed — apply to reset sim");
-            }
-            if ui.button("Apply & reset simulation").clicked() {
-                apply_clicked = true;
-            }
-
-            let min_cursor = sim.cursors.iter().copied().min().unwrap_or(0);
-            ui.separator();
-            ui.label(format!("Placements: {}", sim.placements.len()));
-            ui.label(format!("Min cursor: {min_cursor}"));
-            if viewport.simulation_pending {
-                ui.label(format!("Simulating to index {}", viewport.target_index));
-            }
         });
 
     if apply_clicked {

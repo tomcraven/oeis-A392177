@@ -2,11 +2,11 @@ use bevy::asset::RenderAssetUsages;
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
+use crate::CELL_SIZE;
 use crate::model::GameDefinition;
 use crate::sim::Simulation;
 use crate::spiral::xy_to_index;
-use crate::viewport::{grid_to_world, ViewportState};
-use crate::CELL_SIZE;
+use crate::viewport::{ViewportState, grid_to_world};
 
 #[derive(Resource)]
 pub struct RenderAssets {
@@ -21,7 +21,7 @@ pub struct RenderCache {
 }
 
 #[derive(Component)]
-pub(crate) struct BoardTexture;
+pub struct BoardTexture;
 
 pub fn setup_render_assets(
     mut commands: Commands,

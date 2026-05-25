@@ -1,6 +1,13 @@
 use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 
+use crate::viewport::grid_to_world;
+
+#[derive(Resource, Default)]
+pub struct PendingCameraAction {
+    pub center_view: bool,
+}
+
 #[derive(Component)]
 pub struct PanCamera {
     pub pan_speed: f32,
@@ -44,7 +51,8 @@ pub fn camera_controls(
         delta.x += 1.0;
     }
     if delta != Vec2::ZERO {
-        transform.translation += (delta.normalize() * pan.pan_speed * time.delta_secs()).extend(0.0);
+        transform.translation +=
+            (delta.normalize() * pan.pan_speed * time.delta_secs()).extend(0.0);
     }
 
     for wheel in mouse_wheel.read() {
@@ -57,4 +65,20 @@ pub fn camera_controls(
             ortho.scale = (ortho.scale * factor).clamp(pan.min_scale, pan.max_scale);
         }
     }
+}
+
+pub fn apply_camera_actions(
+    mut pending: ResMut<PendingCameraAction>,
+    mut query: Query<&mut Transform, With<Camera2d>>,
+) {
+    if !pending.center_view {
+        return;
+    }
+    pending.center_view = false;
+    let Ok(mut transform) = query.single_mut() else {
+        return;
+    };
+    let origin = grid_to_world(0, 0);
+    transform.translation.x = origin.x;
+    transform.translation.y = origin.y;
 }

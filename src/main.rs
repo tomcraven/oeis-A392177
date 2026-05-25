@@ -1,23 +1,15 @@
-mod camera;
-mod model;
-mod render;
-mod sim;
-mod spiral;
-mod ui;
-mod viewport;
-
 use bevy::asset::AssetMetaCheck;
 use bevy::prelude::*;
 use bevy_egui::{EguiPlugin, EguiPrimaryContextPass};
 
-use camera::camera_controls;
-use model::GameDefinition;
-use render::{draw_spiral_cells, setup_render_assets, sync_army_materials, RenderCache};
-use sim::Simulation;
-use ui::{ui_game_definition, UiState};
-use viewport::{sync_simulation_to_viewport, ViewportState};
-
-pub const CELL_SIZE: f32 = 16.0;
+use red_black_knights::camera::{self, camera_controls};
+use red_black_knights::model::GameDefinition;
+use red_black_knights::render::{
+    RenderCache, draw_spiral_cells, setup_render_assets, sync_army_materials,
+};
+use red_black_knights::sim::Simulation;
+use red_black_knights::ui::{UiState, ui_game_definition};
+use red_black_knights::viewport::{ViewportState, sync_simulation_to_viewport};
 
 fn main() {
     App::new()
@@ -44,12 +36,17 @@ fn main() {
         .init_resource::<UiState>()
         .init_resource::<RenderCache>()
         .init_resource::<ViewportState>()
-        .add_systems(Startup, (setup_camera, setup_render_assets, setup_smoke_test))
+        .init_resource::<camera::PendingCameraAction>()
+        .add_systems(
+            Startup,
+            (setup_camera, setup_render_assets, setup_smoke_test),
+        )
         .add_systems(EguiPrimaryContextPass, ui_game_definition)
         .add_systems(
             Update,
             (
                 camera_controls,
+                camera::apply_camera_actions,
                 sync_simulation_to_viewport,
                 sync_army_materials,
                 draw_spiral_cells,
@@ -86,10 +83,5 @@ fn smoke_test_exit(
 }
 
 fn setup_camera(mut commands: Commands) {
-    commands.spawn((
-        Camera2d,
-        camera::PanCamera {
-            ..default()
-        },
-    ));
+    commands.spawn((Camera2d, camera::PanCamera { ..default() }));
 }

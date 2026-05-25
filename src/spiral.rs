@@ -22,10 +22,7 @@ pub fn index_to_xy(index: u32) -> (i32, i32) {
     if offset < 3 * side_len {
         return (-ring_i, ring_i - 1 - (offset - 2 * side_len) as i32);
     }
-    (
-        -ring_i + 1 + (offset - 3 * side_len) as i32,
-        -ring_i,
-    )
+    (-ring_i + 1 + (offset - 3 * side_len) as i32, -ring_i)
 }
 
 /// Grid coordinates → spiral index.
