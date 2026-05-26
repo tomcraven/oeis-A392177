@@ -71,6 +71,7 @@ Avoid:
 - Combining multiple algorithm changes before measuring.
 - Accepting faster results when checksums or golden outputs changed.
 - Optimizing UI/rendering code when the request targets calculation speed.
+- Release profile / codegen / attribute tuning (`lto`, `#[inline]`, `#[cold]`, `unsafe` hot-path tricks) as the main sim CPU strategy—sim work should stay portable for WASM (see **WASM / portable sim CPU work** in [`OPTIMISATION.md`](../../OPTIMISATION.md)).
 
 ## Reporting
 

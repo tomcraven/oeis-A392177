@@ -7,6 +7,7 @@ Simulation performance work verified with the release timing harness. Rendering 
 - Correctness: `cargo test --features bevy/dynamic_linking`
 - Timing: `cargo run --release --features bevy/dynamic_linking --bin time_sim` (optional `TIME_SIM_ITERS`, `TIME_SIM_WARMUP`; reports mean/median/stdev)
 - Checksums on all representative presets must stay unchanged.
+- **WASM / portable sim CPU work:** Prefer algorithm and data-structure changes that behave the same on native and `wasm32-unknown-unknown`. Do **not** treat release profile tweaks (`lto`, `codegen-units`), `#[inline]` / `#[cold]`, or `unsafe` micro-hacks as the primary optimisation path—they may not apply to wasm shipping profiles (`wasm-release`, `wasm-release-fast`) and are easy to mis-read on native-only A/B. Validate meaningful wins on native `time_sim` first; for wasm-specific regressions, use the wasm release profile when investigating.
 
 ## Cherry-picked from stash (sim / viewport / spiral only)
 
@@ -22,7 +23,7 @@ These changes are in the tree; they do **not** alter board zoom visuals:
 - **Local cursor/`xy` in `step_turn`** — scan loop mutates locals and writes `cursors`/`cursor_positions` only on placement or failure (fewer repeated vector index ops in the hot loop).
 - **`range_bits_all_set`** — shared helper for forbidden word-tail tests (same bit logic as before, single implementation).
 - **Scan loop word cache (2026-05-26)** — cache active forbidden `u64` across `spiral_step` advances within a word; inline same-word tail skip (no closure); `get`-style membership checks; drop unreachable `word_end == 0` branch.
-- **`step_turn_scan` const-generic counter (2026-05-26)** — `COUNT_CELLS` monomorphization drops per-iteration `cells_examined` increments on the release `step_turn` path; tests still use `step_turn_inner`.
+- **`step_turn_scan` const-generic counter (2026-05-26)** — `COUNT_CELLS` monomorphization drops per-iteration `cells_examined` increments on the release `step_turn` path; rejection diagnostics call `step_turn_scan::<true>` from tests only.
 - **`ForbiddenSet::insert` hot path (2026-05-26)** — branch on `word_index < words.len()` before `resize`; late-game fanout mostly ORs into existing words.
 
 ## Left in stash (changes visuals or GPU risk)
@@ -111,7 +112,7 @@ Session baseline for A/B: `TIME_SIM_ITERS=20`, medians `knight_2_pairwise` 2.600
 
 Hypothesis: late-game clique presets might reject **thousands** of spiral cells per turn, making a dynamic “next legal index” structure worthwhile.
 
-**Measurement:** `scan_rejection_late_game_presets_and_random` in `src/sim.rs` (`step_turn_inner` counts loop iterations; on success **rejections = cells_examined − 1**). Forbidden word-tail skips count as **one** iteration, matching CPU work rather than raw spiral index distance.
+**Measurement:** `scan_rejection_late_game_presets_and_random` in `src/sim.rs` (`step_turn_scan::<true>` counts loop iterations; on success **rejections = cells_examined − 1**). Forbidden word-tail skips count as **one** iteration, matching CPU work rather than raw spiral index distance.
 
 **Run report:**
 
@@ -165,3 +166,27 @@ Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `kni
 - **Occupancy `insert` with `index < len` branch** — noisy vs forbidden-only insert win alone; reverted.
 
 **Kept (round 3 A/B):** `step_turn_scan::<false>` (no release counter) + `ForbiddenSet::insert` existing-word branch. Confirming run medians: 2.808 / 2.836 / 3.243 / 3.859 / 4.371 ms (−4–6% vs session baseline above).
+
+## What did not work (2026-05-26 perf pass, round 4)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.582, `knight_3_clique` 2.933, `leaper_4_mixed_clique` 3.306, `guard_6_clique` 3.893, `chimera_3_clique` 4.426 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+
+- **Cached `forbidden.words` slice + `word_idx` in `step_turn_scan`** (direct indexing vs `word_bits`, compare on word change) — mixed; `knight_2_pairwise` median up (~2.90 ms); reverted.
+- **Same-word batched OR in `ForbiddenSet::insert_moves_from_xy`** — only helps single-target fanout; bench presets are mostly multi-target; `knight_2_pairwise` regressed (~3.08 ms); reverted.
+- **Skip forbidden tail-skip work when `forb_word == 0`** (defer `word_end` / mask math until the active word has any forbidden bit) — noisy across three harness passes; medians often matched or exceeded baseline (e.g. `guard_6_clique` ~4.12 ms); reverted.
+- **Tail-skip only when `word_end - next > 1`** — regressed multi-army medians; reverted.
+- **`ForbiddenSet::insert` via `get_unchecked_mut` on hot path** — within jitter / slight regression vs existing-word branch; reverted.
+- **`#[inline(never)]` on `place` / `record_forbidden`** — clear regression (e.g. `guard_6_clique` ~4.08 ms); reverted.
+- **Forbidden membership via `(forb_word >> (cursor & 63)) & 1`** instead of `1 << bit` — mixed (`knight_2_pairwise` worse, some clique cases better); reverted.
+- **Occupancy `insert` with `index < len` branch (retry on post–round-3 tree)** — multi-army medians up; reverted.
+
+**Kept (round 4):** none — tree unchanged vs round 3 commit.
+
+## What did not work (2026-05-26 perf pass, round 5 — WASM-safe scope)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 2.866, `leaper_4_mixed_clique` 3.250, `guard_6_clique` 3.846, `chimera_3_clique` 4.500 ms. Checksums unchanged; `cargo testd` passed.
+
+- **`ForbiddenSet::insert` growth via `push(bit)` when `word_index == words.len()`** (avoid `resize` for the next word only) — large regression on all bench cases (e.g. `guard_6_clique` ~7 ms); repeated `push` realloc vs batched `resize`; reverted.
+- **Toolchain / codegen experiments (out of scope for wasm parity):** `lto = "fat"`, `#[inline(always)]` on hot helpers — not pursued; native-only and not the intended optimisation surface.
+
+**Kept (round 5):** none. `Cargo.toml` release profile remains `lto = "thin"`, `codegen-units = 1`.

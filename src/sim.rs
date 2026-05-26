@@ -132,13 +132,6 @@ impl Simulation {
         self.step_turn_scan::<false>(def, &mut 0)
     }
 
-    /// `(placed, spiral_cells_examined)` — one loop iteration per examined index (including the placed cell).
-    fn step_turn_inner(&mut self, def: &GameDefinition) -> (bool, u32) {
-        let mut cells_examined = 0u32;
-        let placed = self.step_turn_scan::<true>(def, &mut cells_examined);
-        (placed, cells_examined)
-    }
-
     fn step_turn_scan<const COUNT_CELLS: bool>(
         &mut self,
         def: &GameDefinition,
@@ -427,8 +420,10 @@ mod tests {
         let mut sum = 0u64;
 
         for turn in 0..total_turns {
-            let (placed, examined) = sim.step_turn_inner(def);
+            let mut cells_examined = 0u32;
+            let placed = sim.step_turn_scan::<true>(def, &mut cells_examined);
             assert!(placed, "turn {turn} failed to place");
+            let examined = cells_examined;
             let rejections = rejections_on_success(examined);
             sum += rejections as u64;
             if rejections > max_rejections {
