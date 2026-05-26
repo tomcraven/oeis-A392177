@@ -7,6 +7,14 @@ use bevy::platform::time::Instant;
 
 const EMPTY_ARMY: ArmyId = usize::MAX;
 
+fn resize_army_vectors<T: Clone>(vec: &mut Vec<T>, len: usize, fill: T) {
+    if vec.len() == len {
+        vec.fill(fill);
+    } else {
+        *vec = vec![fill; len];
+    }
+}
+
 #[derive(Resource)]
 pub struct Simulation {
     /// Dense by spiral index because simulation placement scans are numeric and monotonic.
@@ -27,7 +35,7 @@ impl Simulation {
     pub fn new(def: &GameDefinition) -> Self {
         Self {
             occupancy: OccupancyGrid::new(),
-            forbidden: vec![ForbiddenSet::new(); def.armies.len()],
+            forbidden: vec![ForbiddenSet::default(); def.armies.len()],
             threatened_for: threatened_for(def),
             cursors: vec![0; def.armies.len()],
             cursor_positions: vec![(0, 0); def.armies.len()],
@@ -39,10 +47,17 @@ impl Simulation {
 
     pub fn reset(&mut self, def: &GameDefinition) {
         self.occupancy.clear();
-        self.forbidden = vec![ForbiddenSet::new(); def.armies.len()];
+        let army_count = def.armies.len();
+        if self.forbidden.len() == army_count {
+            for set in &mut self.forbidden {
+                set.clear();
+            }
+        } else {
+            self.forbidden = vec![ForbiddenSet::default(); army_count];
+        }
         self.threatened_for = threatened_for(def);
-        self.cursors = vec![0; def.armies.len()];
-        self.cursor_positions = vec![(0, 0); def.armies.len()];
+        resize_army_vectors(&mut self.cursors, army_count, 0);
+        resize_army_vectors(&mut self.cursor_positions, army_count, (0, 0));
         self.turn_order_index = 0;
         self.turn_step = 0;
         self.placements.clear();
@@ -267,8 +282,8 @@ struct ForbiddenSet {
 }
 
 impl ForbiddenSet {
-    fn new() -> Self {
-        Self { words: Vec::new() }
+    fn clear(&mut self) {
+        self.words.clear();
     }
 
     fn insert(&mut self, index: u32) {
@@ -620,9 +635,47 @@ mod tests {
         ]
     }
 
+    fn backing_capacities(sim: &Simulation) -> (usize, usize, usize) {
+        let forb: usize = sim.forbidden.iter().map(|f| f.words.capacity()).sum();
+        (sim.occupancy.cells.capacity(), sim.placements.capacity(), forb)
+    }
+
+    #[test]
+    fn hot_path_vec_capacity_growth_is_bounded() {
+        let def = GameDefinition::guard_6_clique();
+        let mut sim = Simulation::new(&def);
+        let mut capacity_events = 0usize;
+
+        for _ in 0..100_000 {
+            let before = backing_capacities(&sim);
+            assert!(sim.step_turn(&def));
+            let after = backing_capacities(&sim);
+            if after != before {
+                capacity_events += 1;
+            }
+        }
+        eprintln!("backing capacity changes during first 100k turns: {capacity_events}");
+
+        let caps = backing_capacities(&sim);
+        for _ in 0..5_000 {
+            let before = backing_capacities(&sim);
+            assert!(sim.step_turn(&def));
+            assert_eq!(backing_capacities(&sim), before);
+        }
+
+        sim.reset(&def);
+        for _ in 0..1_000 {
+            let before = backing_capacities(&sim);
+            assert!(sim.step_turn(&def));
+            assert_eq!(backing_capacities(&sim), before);
+        }
+
+        assert_eq!(backing_capacities(&sim), caps);
+    }
+
     #[test]
     fn forbidden_bits_all_set_covers_word_tail() {
-        let mut set = ForbiddenSet::new();
+        let mut set = ForbiddenSet::default();
         for index in 0..64 {
             set.insert(index);
         }

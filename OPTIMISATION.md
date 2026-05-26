@@ -129,6 +129,20 @@ cargo test --release --features bevy/dynamic_linking scan_rejection_late_game --
 
 **Never ≥1000 rejections/turn** in this survey (test asserts `global_max < 1000`). Typical turns are 0–1 rejection (late p50 ≈ 1). Cost is ~100k turns × a **short** scan loop plus placement fanout, not long rejection runs—so successor/rank-select bitstructures are unlikely to beat the current scan.
 
+## Hot-path heap allocations (2026-05-26)
+
+**`step_turn` scan loop:** no heap allocation (only stack locals and bit/occupancy reads).
+
+**`place()` (once per successful turn):** may extend `occupancy.cells`, each affected `forbidden[].words`, and `placements` via `push`. Until backing `capacity()` reaches the run’s max spiral index / word count, those extensions can reallocate—typically tens of times over the first 100k turns (`hot_path_vec_capacity_growth_is_bounded` prints the count with `--nocapture`), then **zero** capacity growth for subsequent turns and after `reset()` (buffers are cleared, not dropped).
+
+**Changes kept:**
+
+- **`Simulation::reset`** — `clear()` occupancy, placements, and forbidden words; reuse cursor vectors with `fill` when army count unchanged (avoids fresh `Vec` allocs on preset reload).
+
+**Not kept (release timing regression):** power-of-two `reserve` before `resize` in `insert` (`grow_to_len`), upfront `placements`/`occupancy`/`forbidden` pre-reservation—large reserved arenas hurt cache/TLB despite fewer `realloc` calls.
+
+**Regression test:** `hot_path_vec_capacity_growth_is_bounded` (`cargo testd hot_path_vec_capacity -- --nocapture`).
+
 ## Future work
 
 - Safe far zoom-out needs a viewport-limited **render** path, not only a higher `max_scale`.
