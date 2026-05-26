@@ -1,12 +1,10 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
-use crate::camera::BoardCamera;
-use crate::calibration::{CalibrationGate, UserMaxZoomOut};
-use crate::calibration_config::{self, CalibrationSettings};
+use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
+use crate::calibration_config;
 use crate::CELL_SIZE;
-use crate::camera::PendingCameraAction;
-use crate::model::{Army, GameDefinition, PieceDef};
+use crate::model::GameDefinition;
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
     shared_attack_extent_for_armies, shift_attacks, toggle_random_attack_square,
@@ -20,14 +18,12 @@ use crate::viewport::{self, ViewportState};
 #[derive(Resource)]
 pub struct UiState {
     pub draft: Option<GameDefinition>,
-    /// When true, any draft change that affects the sim is applied automatically.
-    pub auto_update: bool,
     pub random_gen: RandomGenConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
     pub mutate_army: usize,
     pub mutate_all: bool,
     pub preset_index: usize,
-    /// Piece shown in the Pieces editor dropdown.
+    /// Piece shown in the nested Advanced editor under Pieces.
     pub edit_army: usize,
 }
 
@@ -35,7 +31,6 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             draft: None,
-            auto_update: true,
             random_gen: RandomGenConfig::default(),
             mutate_army: 0,
             mutate_all: false,
@@ -59,9 +54,7 @@ pub fn ui_game_definition(
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
-    mut calibration: ResMut<CalibrationGate>,
-    mut user_max: ResMut<UserMaxZoomOut>,
-    camera_q: Query<&Projection, With<BoardCamera>>,
+    mut camera_q: Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -72,77 +65,70 @@ pub fn ui_game_definition(
         .draft
         .take()
         .unwrap_or_else(|| def.as_ref().clone());
-    let mut apply_clicked = false;
-    let auto_update = ui_state.auto_update;
-
     let panel_response = egui::SidePanel::left("game_config")
-        .default_width(320.0)
+        .default_width(SIDEBAR_PANEL_WIDTH)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.heading("Red & Black Knights");
-                    if ui.button("Center view").clicked() {
-                        camera_actions.center_view = true;
-                    }
                     ui.collapsing("View", |ui| {
-                        let gpu_cap =
-                            if let (Ok(Projection::Orthographic(ortho)), Ok(window)) =
-                                (camera_q.single(), window_q.single())
-                            {
-                                viewport::max_safe_zoom_out_scale(
-                                    ortho,
-                                    window,
-                                    viewport.left_inset_px,
-                                )
-                            } else {
-                                64.0
-                            };
-                        let slider_hi = gpu_cap.max(1.0);
-                        let mut max_zoom = if user_max.scale.is_finite()
-                            && user_max.scale < f32::MAX
-                        {
-                            user_max.scale
-                        } else {
-                            slider_hi.min(6.0).max(1.0)
-                        };
-                        max_zoom = max_zoom.clamp(0.05, slider_hi);
-                        ui.label("Zoom-out budget");
-                        let slider = ui
-                            .add(
-                                egui::Slider::new(&mut max_zoom, 0.5..=slider_hi)
-                                    .logarithmic(true)
-                                    .text("max scale"),
-                            )
-                            .on_hover_text(
-                                "How far you can zoom out. Higher values mean larger grids and \
-                                 longer loads when panning or switching presets.",
-                            );
-                        if slider.changed() {
-                            user_max.scale = max_zoom;
-                            let _ = calibration_config::save(&CalibrationSettings {
-                                max_zoom_out_scale: max_zoom,
-                                probe_time_budget_secs: calibration.probe_time_budget_secs,
-                            });
+                        if ui.button("Center view").clicked() {
+                            camera_actions.center_view = true;
                         }
-                        ui.horizontal(|ui| {
-                            ui.label(format!("Current zoom cap: {max_zoom:.2}"));
-                            ui.weak(format!("(GPU ~{slider_hi:.0})"));
-                        });
-                        if !calibration.is_running()
-                            && ui
-                                .button("Suggest max from machine")
-                                .on_hover_text(
-                                    "Run a quick calibration benchmark and set the slider to its result.",
-                                )
-                                .clicked()
+
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(4.0);
+
+                        if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
                         {
-                            calibration.request_recalibrate();
+                            if let Projection::Orthographic(ref mut ortho) = *projection {
+                                sidebar_field_label(ui, "Position");
+                                ui.columns(2, |cols| {
+                                    let row_h = cols[0].spacing().interact_size.y;
+                                    let w0 = cols[0].available_width();
+                                    let w1 = cols[1].available_width();
+                                    cols[0].add_sized(
+                                        egui::vec2(w0, row_h),
+                                        egui::DragValue::new(&mut transform.translation.x)
+                                            .speed(4.0),
+                                    );
+                                    cols[1].add_sized(
+                                        egui::vec2(w1, row_h),
+                                        egui::DragValue::new(&mut transform.translation.y)
+                                            .speed(4.0),
+                                    );
+                                });
+                                ui.add_space(4.0);
+
+                                let effective_zoom_max =
+                                    if let Ok(window) = window_q.single() {
+                                        let safe = viewport::max_safe_zoom_out_scale(
+                                            ortho,
+                                            window,
+                                            viewport.left_inset_px,
+                                        );
+                                        calibration_config::effective_zoom_out_max(safe, pan.max_scale)
+                                    } else {
+                                        calibration_config::MAX_ZOOM_OUT_BUDGET
+                                            .min(pan.max_scale)
+                                    };
+                                ortho.scale = ortho
+                                    .scale
+                                    .clamp(pan.min_scale, effective_zoom_max);
+
+                                sidebar_field_label(ui, "Zoom");
+                                ui.add(
+                                    egui::DragValue::new(&mut ortho.scale)
+                                        .range(pan.min_scale..=effective_zoom_max)
+                                        .speed(0.02)
+                                        .fixed_decimals(3),
+                                );
+                                ui.add_space(SIDEBAR_FIELD_GAP);
+                            }
                         }
                     });
-                    ui.checkbox(&mut ui_state.auto_update, "Auto update simulation");
-                    ui.separator();
-
                     ui.collapsing("Presets", |ui| {
                         let catalog = GameDefinition::preset_catalog();
                         let n = catalog.len().max(1);
@@ -154,21 +140,20 @@ pub fn ui_game_definition(
                             ui_state.preset_index = new_idx % n;
                             draft = apply_preset_index(ui_state.preset_index);
                         };
+                        egui::ComboBox::from_id_salt("preset_pick")
+                            .selected_text(catalog[idx].0)
+                            .show_ui(ui, |ui| {
+                                for (i, (label, _)) in catalog.iter().enumerate() {
+                                    if ui.selectable_label(idx == i, *label).clicked() {
+                                        load_preset(i);
+                                    }
+                                }
+                            });
                         ui.horizontal(|ui| {
-                            if ui.button("◀").on_hover_text("Previous preset").clicked() {
+                            if ui.button("◀ Previous").clicked() {
                                 load_preset(idx + n - 1);
                             }
-                            egui::ComboBox::from_id_salt("preset_pick")
-                                .selected_text(catalog[idx].0)
-                                .width(ui.available_width() - 56.0)
-                                .show_ui(ui, |ui| {
-                                    for (i, (label, _)) in catalog.iter().enumerate() {
-                                        if ui.selectable_label(idx == i, *label).clicked() {
-                                            load_preset(i);
-                                        }
-                                    }
-                                });
-                            if ui.button("▶").on_hover_text("Next preset").clicked() {
+                            if ui.button("Next ▶").clicked() {
                                 load_preset(idx + 1);
                             }
                         });
@@ -176,112 +161,65 @@ pub fn ui_game_definition(
 
                     ui.collapsing("Random generator", |ui| {
                         let rg = &mut ui_state.random_gen;
-                        ui.label("Piece count range");
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut rg.army_count_min)
-                                    .range(1..=32)
-                                    .prefix("min: "),
+                        ui.scope(|ui| {
+                            sidebar_u32_range(
+                                ui,
+                                "Piece count",
+                                &mut rg.army_count_min,
+                                &mut rg.army_count_max,
+                                1..=32,
+                                None,
                             );
-                            ui.add(
-                                egui::DragValue::new(&mut rg.army_count_max)
-                                    .range(1..=32)
-                                    .prefix("max: "),
+                            sidebar_i32_range(
+                                ui,
+                                "Attack radius",
+                                &mut rg.attack_radius_min,
+                                &mut rg.attack_radius_max,
+                                1..=12,
+                                Some(
+                                    "Chebyshev distance from each piece when sampling attack cells",
+                                ),
                             );
-                        });
 
-                        ui.label("Attack pattern (from piece center)");
-                        ui.horizontal(|ui| {
-                            ui.add(
-                                egui::DragValue::new(&mut rg.attack_radius_min)
-                                    .range(1..=12)
-                                    .prefix("radius min: "),
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+
+                            sidebar_f32_slider(
+                                ui,
+                                "Pattern density",
+                                &mut rg.pattern_density,
+                                0.0..=1.0,
+                                false,
+                                None,
                             );
-                            ui.add(
-                                egui::DragValue::new(&mut rg.attack_radius_max)
-                                    .range(1..=12)
-                                    .prefix("radius max: "),
-                            );
-                        });
-                        ui.add(
-                            egui::Slider::new(&mut rg.pattern_density, 0.0..=1.0)
-                                .text("pattern density"),
-                        );
-                        ui.label("Attack symmetry");
-                        egui::ComboBox::from_id_salt("random_attack_symmetry")
-                            .selected_text(rg.attack_symmetry.label())
-                            .show_ui(ui, |ui| {
-                                for mode in AttackSymmetry::ALL {
-                                    if ui
-                                        .selectable_label(
-                                            rg.attack_symmetry == mode,
-                                            mode.label(),
-                                        )
-                                        .clicked()
-                                    {
-                                        rg.attack_symmetry = mode;
-                                    }
-                                }
-                            });
-                        ui.add(
-                            egui::Slider::new(&mut rg.blocked_by_density, 0.0..=1.0)
-                                .text("blocked-by density"),
-                        );
-
-                        if ui.button("Generate random pieces").clicked() {
-                            rg.sanitize();
-                            let mut rng = rand::rng();
-                            draft = generate_random_game(rg, &mut rng);
-                        }
-                    });
-
-                    ui.separator();
-
-                    ui.collapsing("Piece summary", |ui| {
-                        if draft.armies.is_empty() {
-                            ui.label("No pieces");
-                        } else {
-                            let row_h = draft
-                                .armies
-                                .iter()
-                                .map(|a| summary_preview_side_px(&a.piece.valid_moves))
-                                .fold(0.0_f32, f32::max);
-                            egui::ScrollArea::horizontal()
-                                .min_scrolled_height(0.0)
-                                .max_height(row_h)
-                                .show(ui, |ui| {
-                                    ui.horizontal_top(|ui| {
-                                        ui.spacing_mut().item_spacing =
-                                            egui::vec2(2.0, 0.0);
-                                        for (army_idx, army) in draft.armies.iter().enumerate() {
-                                            let blocked: Vec<_> = army
-                                                .blocked_by
-                                                .iter()
-                                                .filter_map(|&id| {
-                                                    draft.armies.get(id).map(|a| a.name.as_str())
-                                                })
-                                                .collect();
-                                            let blocked_line = if blocked.is_empty() {
-                                                "blocked by: —".to_string()
-                                            } else {
-                                                format!("blocked by: {}", blocked.join(", "))
-                                            };
-                                            let hover = format!(
-                                                "{army_idx}: {}\n{blocked_line}",
-                                                army.name
-                                            );
-
-                                            move_grid_preview_ui(
-                                                ui,
-                                                army_idx,
-                                                &army.piece.valid_moves,
-                                                army.color,
+                            sidebar_field_label(ui, "Attack symmetry");
+                            egui::ComboBox::from_id_salt("random_attack_symmetry")
+                                .selected_text(rg.attack_symmetry.label())
+                                .show_ui(ui, |ui| {
+                                    for mode in AttackSymmetry::ALL {
+                                        if ui
+                                            .selectable_label(
+                                                rg.attack_symmetry == mode,
+                                                mode.label(),
                                             )
-                                            .on_hover_text(hover);
+                                            .clicked()
+                                        {
+                                            rg.attack_symmetry = mode;
                                         }
-                                    });
+                                    }
                                 });
-                        }
+                            ui.add_space(SIDEBAR_FIELD_GAP);
+
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(6.0);
+                            if ui.button("Generate random pieces").clicked() {
+                                rg.sanitize();
+                                let mut rng = rand::rng();
+                                draft = generate_random_game(rg, &mut rng);
+                            }
+                        });
                     });
 
                     ui.collapsing("Mutate", |ui| {
@@ -338,97 +276,109 @@ pub fn ui_game_definition(
                                 None
                             };
 
-                            if ui.button("Toggle random attack square").clicked() {
-                                for &aid in &targets {
-                                    toggle_random_attack_square(
-                                        &mut draft.armies[aid].piece.valid_moves,
-                                        &mut rng,
-                                    );
-                                }
-                            }
-                            ui.horizontal(|ui| {
-                                if ui.button("Shift +X").clicked() {
-                                    for &aid in &targets {
-                                        shift_attacks(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                            1,
-                                            0,
-                                            shared_r,
-                                        );
-                                    }
-                                }
-                                if ui.button("Shift −X").clicked() {
-                                    for &aid in &targets {
-                                        shift_attacks(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                            -1,
-                                            0,
-                                            shared_r,
-                                        );
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Shift +Y").clicked() {
-                                    for &aid in &targets {
-                                        shift_attacks(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                            0,
-                                            1,
-                                            shared_r,
-                                        );
-                                    }
-                                }
-                                if ui.button("Shift −Y").clicked() {
-                                    for &aid in &targets {
-                                        shift_attacks(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                            0,
-                                            -1,
-                                            shared_r,
-                                        );
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Flip Y").clicked() {
-                                    for &aid in &targets {
-                                        reflect_across_x_axis(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                        );
-                                    }
-                                }
-                                if ui.button("Flip X").clicked() {
-                                    for &aid in &targets {
-                                        reflect_across_y_axis(
-                                            &mut draft.armies[aid].piece.valid_moves,
-                                        );
-                                    }
-                                }
-                            });
-                            ui.horizontal(|ui| {
-                                if ui.button("Rotate ↻").clicked() {
-                                    for &aid in &targets {
-                                        rotate_cw(&mut draft.armies[aid].piece.valid_moves);
-                                    }
-                                }
-                                if ui.button("Rotate ↺").clicked() {
-                                    for &aid in &targets {
-                                        rotate_ccw(&mut draft.armies[aid].piece.valid_moves);
-                                    }
-                                }
-                            });
+                            ui.add_space(4.0);
+                            ui.scope(|ui| {
+                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
 
-                            if ui.button("Toggle random blocked-by").clicked() {
-                                for &aid in &targets {
-                                    toggle_random_blocked_by(
-                                        &mut draft.armies[aid],
-                                        aid,
-                                        army_count,
-                                        &mut rng,
-                                    );
-                                }
-                            }
+                                if mutate_panel_button(ui, "Toggle attack square") {
+                                        for &aid in &targets {
+                                            toggle_random_attack_square(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut rng,
+                                            );
+                                        }
+                                    }
+
+                                    let (shift_px, shift_mx) =
+                                        mutate_panel_pair(ui, "+X", "−X");
+                                    if shift_px {
+                                        for &aid in &targets {
+                                            shift_attacks(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                                1,
+                                                0,
+                                                shared_r,
+                                            );
+                                        }
+                                    }
+                                    if shift_mx {
+                                        for &aid in &targets {
+                                            shift_attacks(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                                -1,
+                                                0,
+                                                shared_r,
+                                            );
+                                        }
+                                    }
+                                    let (shift_py, shift_my) =
+                                        mutate_panel_pair(ui, "+Y", "−Y");
+                                    if shift_py {
+                                        for &aid in &targets {
+                                            shift_attacks(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                                0,
+                                                1,
+                                                shared_r,
+                                            );
+                                        }
+                                    }
+                                    if shift_my {
+                                        for &aid in &targets {
+                                            shift_attacks(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                                0,
+                                                -1,
+                                                shared_r,
+                                            );
+                                        }
+                                    }
+
+                                    let (flip_y, flip_x) =
+                                        mutate_panel_pair(ui, "Flip Y", "Flip X");
+                                    if flip_y {
+                                        for &aid in &targets {
+                                            reflect_across_x_axis(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                            );
+                                        }
+                                    }
+                                    if flip_x {
+                                        for &aid in &targets {
+                                            reflect_across_y_axis(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                            );
+                                        }
+                                    }
+
+                                    let (rot_ccw, rot_cw) =
+                                        mutate_panel_pair(ui, "↺ CCW", "↻ CW");
+                                    if rot_ccw {
+                                        for &aid in &targets {
+                                            rotate_ccw(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                            );
+                                        }
+                                    }
+                                    if rot_cw {
+                                        for &aid in &targets {
+                                            rotate_cw(
+                                                &mut draft.armies[aid].piece.valid_moves,
+                                            );
+                                        }
+                                    }
+
+                                    if mutate_panel_button(ui, "Toggle blocked-by") {
+                                        for &aid in &targets {
+                                            toggle_random_blocked_by(
+                                                &mut draft.armies[aid],
+                                                aid,
+                                                army_count,
+                                                &mut rng,
+                                            );
+                                        }
+                                    }
+                                });
                         }
                     });
 
@@ -436,129 +386,149 @@ pub fn ui_game_definition(
                         if draft.armies.is_empty() {
                             ui.label("No pieces");
                         } else {
-                            if ui_state.edit_army >= draft.armies.len() {
-                                ui_state.edit_army = draft.armies.len() - 1;
-                            }
-                            let army_idx = ui_state.edit_army;
-                            egui::ComboBox::from_id_salt("army_edit_pick")
-                                .selected_text(format!(
-                                    "{}: {}",
-                                    army_idx, draft.armies[army_idx].name
-                                ))
-                                .show_ui(ui, |ui| {
-                                    for (aid, army) in draft.armies.iter().enumerate() {
-                                        if ui
-                                            .selectable_label(
-                                                army_idx == aid,
-                                                format!("{aid}: {}", army.name),
+                            let advanced_id = ui.make_persistent_id("pieces_advanced");
+                            let advanced_was_open =
+                                egui::collapsing_header::CollapsingState::load_with_default_open(
+                                    ui.ctx(),
+                                    advanced_id,
+                                    false,
+                                )
+                                .is_open();
+                            let mut open_advanced = false;
+                            let row_h = draft
+                                .armies
+                                .iter()
+                                .map(|a| summary_preview_side_px(&a.piece.valid_moves))
+                                .fold(0.0_f32, f32::max);
+                            egui::ScrollArea::horizontal()
+                                .min_scrolled_height(0.0)
+                                .max_height(row_h)
+                                .show(ui, |ui| {
+                                    ui.horizontal_top(|ui| {
+                                        ui.spacing_mut().item_spacing =
+                                            egui::vec2(2.0, 0.0);
+                                        for (army_idx, army) in draft.armies.iter().enumerate() {
+                                            let blocked: Vec<_> = army
+                                                .blocked_by
+                                                .iter()
+                                                .filter_map(|&id| {
+                                                    draft.armies.get(id).map(|a| a.name.as_str())
+                                                })
+                                                .collect();
+                                            let blocked_line = if blocked.is_empty() {
+                                                "blocked by: —".to_string()
+                                            } else {
+                                                format!("blocked by: {}", blocked.join(", "))
+                                            };
+                                            let hover = format!(
+                                                "{army_idx}: {}\n{blocked_line}\nClick to edit",
+                                                army.name
+                                            );
+                                            let selected = army_idx == ui_state.edit_army
+                                                && (advanced_was_open || open_advanced);
+
+                                            let preview = move_grid_preview_ui(
+                                                ui,
+                                                army_idx,
+                                                &army.piece.valid_moves,
+                                                army.color,
+                                                selected,
                                             )
-                                            .clicked()
-                                        {
-                                            ui_state.edit_army = aid;
+                                            .on_hover_text(hover);
+
+                                            if preview.clicked() {
+                                                ui_state.edit_army = army_idx;
+                                                open_advanced = true;
+                                            }
                                         }
-                                    }
+                                    });
                                 });
 
-                            ui.horizontal(|ui| {
-                                ui.label("Name");
-                                ui.text_edit_singleline(&mut draft.armies[army_idx].name);
-                            });
-
-                            let rgb = draft.armies[army_idx].color.to_srgba();
-                            let mut arr = [rgb.red, rgb.green, rgb.blue];
-                            if ui.color_edit_button_rgb(&mut arr).changed() {
-                                draft.armies[army_idx].color =
-                                    Color::srgb(arr[0], arr[1], arr[2]);
-                            }
-
-                            ui.label("Attacked squares");
-                            ui.small("Click cells to toggle moves relative to the piece.");
-                            move_grid_ui(
-                                ui,
-                                army_idx,
-                                &mut draft.armies[army_idx].piece.valid_moves,
-                            );
-
-                            ui.label("Blocked by");
-                            for other in 0..draft.armies.len() {
-                                if other == army_idx {
-                                    continue;
+                            egui::CollapsingHeader::new("Advanced")
+                                .id_salt("pieces_advanced")
+                                .open(if open_advanced { Some(true) } else { None })
+                                .show(ui, |ui| {
+                                if ui_state.edit_army >= draft.armies.len() {
+                                    ui_state.edit_army = draft.armies.len() - 1;
                                 }
-                                let mut blocked =
-                                    draft.armies[army_idx].blocked_by.contains(&other);
-                                let label = draft.armies[other].name.clone();
-                                if ui.checkbox(&mut blocked, label).changed() {
-                                    if blocked {
-                                        if !draft.armies[army_idx].blocked_by.contains(&other)
-                                        {
-                                            draft.armies[army_idx].blocked_by.push(other);
+                                let army_idx = ui_state.edit_army;
+                                egui::ComboBox::from_id_salt("army_edit_pick")
+                                    .selected_text(format!(
+                                        "{}: {}",
+                                        army_idx, draft.armies[army_idx].name
+                                    ))
+                                    .show_ui(ui, |ui| {
+                                        for (aid, army) in draft.armies.iter().enumerate() {
+                                            if ui
+                                                .selectable_label(
+                                                    army_idx == aid,
+                                                    format!("{aid}: {}", army.name),
+                                                )
+                                                .clicked()
+                                            {
+                                                ui_state.edit_army = aid;
+                                            }
                                         }
-                                    } else {
-                                        draft.armies[army_idx]
-                                            .blocked_by
-                                            .retain(|&id| id != other);
+                                    });
+
+                                ui.horizontal(|ui| {
+                                    ui.label("Name");
+                                    ui.text_edit_singleline(&mut draft.armies[army_idx].name);
+                                });
+
+                                let rgb = draft.armies[army_idx].color.to_srgba();
+                                let mut arr = [rgb.red, rgb.green, rgb.blue];
+                                if ui.color_edit_button_rgb(&mut arr).changed() {
+                                    draft.armies[army_idx].color =
+                                        Color::srgb(arr[0], arr[1], arr[2]);
+                                }
+
+                                ui.label("Attacked squares");
+                                move_grid_ui(
+                                    ui,
+                                    army_idx,
+                                    &mut draft.armies[army_idx].piece.valid_moves,
+                                );
+
+                                ui.label("Blocked by");
+                                for other in 0..draft.armies.len() {
+                                    if other == army_idx {
+                                        continue;
+                                    }
+                                    let mut blocked =
+                                        draft.armies[army_idx].blocked_by.contains(&other);
+                                    let label = draft.armies[other].name.clone();
+                                    if ui.checkbox(&mut blocked, label).changed() {
+                                        if blocked {
+                                            if !draft.armies[army_idx]
+                                                .blocked_by
+                                                .contains(&other)
+                                            {
+                                                draft.armies[army_idx].blocked_by.push(other);
+                                            }
+                                        } else {
+                                            draft.armies[army_idx]
+                                                .blocked_by
+                                                .retain(|&id| id != other);
+                                        }
                                     }
                                 }
-                            }
 
-                            ui.horizontal(|ui| {
-                                if ui.button("Add piece").clicked() {
-                                    let id = draft.armies.len();
-                                    draft.armies.push(Army {
-                                        name: format!("Piece {id}"),
-                                        color: Color::srgb(0.5, 0.5, 0.5),
-                                        piece: PieceDef::knight(),
-                                        blocked_by: vec![],
-                                    });
-                                    draft.turn_order.push(id);
-                                    ui_state.edit_army = id;
-                                }
                                 if draft.armies.len() > 1
                                     && ui.button("Remove piece").clicked()
                                 {
-                                    draft.armies.remove(army_idx);
-                                    for army in &mut draft.armies {
-                                        army.blocked_by.retain(|&id| id != army_idx);
-                                        for b in &mut army.blocked_by {
-                                            if *b > army_idx {
-                                                *b -= 1;
-                                            }
-                                        }
-                                    }
-                                    draft.turn_order.retain(|&id| id != army_idx);
-                                    for t in &mut draft.turn_order {
-                                        if *t > army_idx {
-                                            *t -= 1;
-                                        }
-                                    }
-                                    if ui_state.edit_army >= draft.armies.len() {
-                                        ui_state.edit_army = draft.armies.len().saturating_sub(1);
-                                    }
+                                    remove_draft_army(
+                                        &mut draft,
+                                        &mut ui_state,
+                                        army_idx,
+                                    );
                                 }
-                            });
+                                });
                         }
                     });
 
                     if draft.turn_order.is_empty() && !draft.armies.is_empty() {
                         draft.turn_order = (0..draft.armies.len()).collect();
-                    }
-
-                    ui.separator();
-                    let draft_pending = !draft.same_applied_state(def.as_ref());
-                    if draft_pending && !ui_state.auto_update {
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            "Config changed — apply to reset sim",
-                        );
-                    }
-                    if ui
-                        .add_enabled(
-                            draft_pending,
-                            egui::Button::new("Apply & reset simulation"),
-                        )
-                        .clicked()
-                    {
-                        apply_clicked = true;
                     }
 
                     ui.separator();
@@ -575,7 +545,7 @@ pub fn ui_game_definition(
                         ui.label("Grid cells: pending");
                     }
 
-                    if let (Ok(Projection::Orthographic(ortho)), Ok(window)) =
+                    if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
                         (camera_q.single(), window_q.single())
                     {
                         let board_width_px =
@@ -595,9 +565,7 @@ pub fn ui_game_definition(
         });
     viewport.left_inset_px = panel_response.response.rect.width();
 
-    let should_apply =
-        apply_clicked || (auto_update && !draft.same_applied_state(def.as_ref()));
-    if should_apply {
+    if !draft.same_applied_state(def.as_ref()) {
         dedupe_moves(&mut draft);
         *def = draft.clone();
         sim.request_reset(def.clone());
@@ -610,11 +578,6 @@ pub fn ui_game_definition(
     }
 
     ui_state.draft = Some(draft);
-}
-
-/// Pan/zoom on the board while calibration is active.
-pub fn board_camera_active(calibration: Res<CalibrationGate>) -> bool {
-    !calibration.is_running()
 }
 
 fn sim_catchup_progress(viewport: &ViewportState, sim: &SimulationBridge) -> Option<f32> {
@@ -640,11 +603,10 @@ fn sim_catchup_progress(viewport: &ViewportState, sim: &SimulationBridge) -> Opt
 
 pub fn sim_catchup_overlay(
     mut contexts: EguiContexts,
-    calibration: Res<CalibrationGate>,
     viewport: Res<ViewportState>,
     sim: Res<SimulationBridge>,
 ) {
-    if calibration.is_running() || !viewport.simulation_pending {
+    if !viewport.simulation_pending {
         return;
     }
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -743,12 +705,163 @@ fn dedupe_moves(def: &mut GameDefinition) {
     }
 }
 
+const SIDEBAR_PANEL_WIDTH: f32 = 320.0;
+const MUTATE_BTN_HEIGHT: f32 = 24.0;
+
+fn mutate_panel_button(ui: &mut egui::Ui, label: &str) -> bool {
+    let w = ui.available_width();
+    ui.add_sized(
+        egui::vec2(w, MUTATE_BTN_HEIGHT),
+        egui::Button::new(label),
+    )
+    .clicked()
+}
+
+fn mutate_panel_pair(ui: &mut egui::Ui, left: &str, right: &str) -> (bool, bool) {
+    ui.columns(2, |cols| {
+        (
+            mutate_panel_button(&mut cols[0], left),
+            mutate_panel_button(&mut cols[1], right),
+        )
+    })
+}
+
+const SIDEBAR_FIELD_GAP: f32 = 12.0;
+
+fn sidebar_field_label(ui: &mut egui::Ui, text: &str) -> egui::Response {
+    ui.label(text)
+}
+
+fn sidebar_f32_slider(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut f32,
+    range: std::ops::RangeInclusive<f32>,
+    logarithmic: bool,
+    hover: Option<&str>,
+) {
+    let caption = sidebar_field_label(ui, label);
+    if let Some(text) = hover {
+        caption.on_hover_text(text);
+    }
+    let row_h = ui.spacing().interact_size.y;
+    ui.columns(2, |cols| {
+        let w0 = cols[0].available_width();
+        let w1 = cols[1].available_width();
+        let prev_slider_width = cols[0].style().spacing.slider_width;
+        cols[0].style_mut().spacing.slider_width = w0;
+        let mut slider = egui::Slider::new(value, range.clone())
+            .show_value(false)
+            .clamping(egui::SliderClamping::Always);
+        if logarithmic {
+            slider = slider.logarithmic(true);
+        }
+        cols[0].add(slider);
+        cols[0].style_mut().spacing.slider_width = prev_slider_width;
+        let speed = if logarithmic { 0.05 } else { 0.01 };
+        cols[1].add_sized(
+            egui::vec2(w1, row_h),
+            egui::DragValue::new(value)
+                .range(range)
+                .speed(speed)
+                .fixed_decimals(2),
+        );
+    });
+    ui.add_space(SIDEBAR_FIELD_GAP);
+}
+
+fn sidebar_u32_range(
+    ui: &mut egui::Ui,
+    title: &str,
+    min: &mut u32,
+    max: &mut u32,
+    range: std::ops::RangeInclusive<u32>,
+    hover: Option<&str>,
+) {
+    let caption = sidebar_field_label(ui, title);
+    if let Some(text) = hover {
+        caption.on_hover_text(text);
+    }
+    sidebar_min_max_drag_row(ui, min, max, range);
+}
+
+fn sidebar_i32_range(
+    ui: &mut egui::Ui,
+    title: &str,
+    min: &mut i32,
+    max: &mut i32,
+    range: std::ops::RangeInclusive<i32>,
+    hover: Option<&str>,
+) {
+    let caption = sidebar_field_label(ui, title);
+    if let Some(text) = hover {
+        caption.on_hover_text(text);
+    }
+    sidebar_min_max_drag_row(ui, min, max, range);
+}
+
+fn sidebar_min_max_drag_row<T>(
+    ui: &mut egui::Ui,
+    min: &mut T,
+    max: &mut T,
+    range: std::ops::RangeInclusive<T>,
+) where
+    T: egui::emath::Numeric,
+{
+    let row_h = ui.spacing().interact_size.y;
+    ui.columns(2, |cols| {
+        let w0 = cols[0].available_width();
+        let w1 = cols[1].available_width();
+        cols[0].add_sized(
+            egui::vec2(w0, row_h),
+            egui::DragValue::new(min)
+                .prefix("Min ")
+                .range(range.clone()),
+        );
+        cols[1].add_sized(
+            egui::vec2(w1, row_h),
+            egui::DragValue::new(max).prefix("Max ").range(range),
+        );
+    });
+    ui.add_space(SIDEBAR_FIELD_GAP);
+}
+
+fn remove_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {
+    if draft.armies.len() <= 1 {
+        return;
+    }
+    draft.armies.remove(army_idx);
+    for army in &mut draft.armies {
+        army.blocked_by.retain(|&id| id != army_idx);
+        for b in &mut army.blocked_by {
+            if *b > army_idx {
+                *b -= 1;
+            }
+        }
+    }
+    draft.turn_order.retain(|&id| id != army_idx);
+    for t in &mut draft.turn_order {
+        if *t > army_idx {
+            *t -= 1;
+        }
+    }
+    if ui_state.edit_army >= draft.armies.len() {
+        ui_state.edit_army = draft.armies.len().saturating_sub(1);
+    }
+    if !ui_state.mutate_all && ui_state.mutate_army >= draft.armies.len() {
+        ui_state.mutate_army = draft.armies.len().saturating_sub(1);
+    }
+}
+
 fn summary_preview_side_px(moves: &[(i32, i32)]) -> f32 {
     let radius = move_grid_radius(moves, 1);
-    let cell_px = 8.0;
+    let cell_px = MOVE_PREVIEW_CELL_PX;
     let side = (2 * radius as usize + 1) as f32;
-    side * cell_px
+    side * cell_px + 2.0 * MOVE_PREVIEW_PAD_PX
 }
+
+const MOVE_PREVIEW_CELL_PX: f32 = 8.0;
+const MOVE_PREVIEW_PAD_PX: f32 = 4.0;
 
 fn move_grid_radius(moves: &[(i32, i32)], min_radius: i32) -> i32 {
     moves
@@ -764,33 +877,50 @@ fn move_grid_preview_ui(
     army_idx: usize,
     moves: &[(i32, i32)],
     army_color: Color,
+    selected: bool,
 ) -> egui::Response {
     let radius = move_grid_radius(moves, 1);
-    let cell_px = 8.0;
+    let cell_px = MOVE_PREVIEW_CELL_PX;
     let gap = 0.0;
     let rgb = army_color.to_srgba();
-    let attack_fill = egui::Color32::from_rgba_premultiplied(
+    let attack_fill = egui::Color32::from_rgba_unmultiplied(
         (rgb.red * 255.0) as u8,
         (rgb.green * 255.0) as u8,
         (rgb.blue * 255.0) as u8,
-        220,
+        255,
     );
-    let empty_fill = egui::Color32::from_gray(28);
-    let piece_fill = egui::Color32::from_gray(45);
+    let panel_bg = egui::Color32::from_rgb(112, 114, 122);
+    let empty_fill = egui::Color32::from_rgb(126, 128, 136);
+    let piece_fill = egui::Color32::from_rgb(162, 164, 172);
+    let cell_outline = egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 60, 68));
+    let piece_label = egui::Color32::from_rgb(32, 34, 40);
 
     ui.push_id(("move_grid_preview", army_idx), |ui| {
         let side = (2 * radius as usize + 1) as f32;
         let grid_side = side * cell_px + (side - 1.0).max(0.0) * gap;
-        let (grid_rect, response) =
-            ui.allocate_exact_size(egui::vec2(grid_side, grid_side), egui::Sense::hover());
+        let outer_side = grid_side + 2.0 * MOVE_PREVIEW_PAD_PX;
+        let (outer_rect, response) =
+            ui.allocate_exact_size(egui::vec2(outer_side, outer_side), egui::Sense::click());
+
+        let painter = ui.painter();
+        painter.rect_filled(outer_rect, 5.0, panel_bg);
+        if selected {
+            painter.rect_stroke(
+                outer_rect,
+                5.0,
+                egui::Stroke::new(2.0, egui::Color32::from_rgb(72, 118, 196)),
+                egui::StrokeKind::Outside,
+            );
+        }
+        let grid_origin = outer_rect.min + egui::vec2(MOVE_PREVIEW_PAD_PX, MOVE_PREVIEW_PAD_PX);
 
         for y in (-radius..=radius).rev() {
             for x in -radius..=radius {
                 let col = (x + radius) as f32;
                 let row = (radius - y) as f32;
                 let min = egui::pos2(
-                    grid_rect.min.x + col * (cell_px + gap),
-                    grid_rect.min.y + row * (cell_px + gap),
+                    grid_origin.x + col * (cell_px + gap),
+                    grid_origin.y + row * (cell_px + gap),
                 );
                 let cell_rect =
                     egui::Rect::from_min_size(min, egui::vec2(cell_px, cell_px));
@@ -803,14 +933,20 @@ fn move_grid_preview_ui(
                 } else {
                     empty_fill
                 };
-                ui.painter().rect_filled(cell_rect, 1.0, fill);
+                painter.rect_filled(cell_rect, 1.5, fill);
+                painter.rect_stroke(
+                    cell_rect,
+                    1.5,
+                    cell_outline,
+                    egui::StrokeKind::Inside,
+                );
                 if x == 0 && y == 0 {
-                    ui.painter().text(
+                    painter.text(
                         cell_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         "P",
                         egui::FontId::proportional(6.0),
-                        egui::Color32::LIGHT_GRAY,
+                        piece_label,
                     );
                 }
             }

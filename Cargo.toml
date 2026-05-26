@@ -15,6 +15,18 @@ path = "src/main.rs"
 name = "time_sim"
 path = "src/bin/time_sim.rs"
 
+[[bin]]
+name = "discover_batch"
+path = "src/bin/discover_batch.rs"
+
+[[bin]]
+name = "discover_rerender"
+path = "src/bin/discover_rerender.rs"
+
+[[bin]]
+name = "discover_reference"
+path = "src/bin/discover_reference.rs"
+
 [dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_asset",
@@ -44,6 +56,7 @@ log = { version = "0.4", features = ["max_level_debug", "release_max_level_warn"
 rand = "0.9"
 serde = { version = "1", features = ["derive"] }
 toml = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 bevy_egui = { version = "0.39", default-features = false, features = [
     "default_fonts",

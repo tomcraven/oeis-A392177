@@ -3866,6 +3866,7 @@ dependencies = [
  "dirs",
  "getrandom 0.3.4",
  "getrandom 0.4.2",
+ "image",
  "log",
  "rand",
  "serde",

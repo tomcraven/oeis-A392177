@@ -1,0 +1,8 @@
+{
+  "next_iteration": 0,
+  "target_index": 4819953,
+  "turns_per_run": 0,
+  "cell_pixel_scale": 16,
+  "batch_size": 3,
+  "notes": "Catalog mode: iteration maps to simple piece combos (see discover_catalog.rs). next_iteration advances through the 152 recipes. Keep presets rarely — compare scale_center/mid/full to knight reference."
+}

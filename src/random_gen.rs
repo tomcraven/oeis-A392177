@@ -1,11 +1,13 @@
 use bevy::prelude::Color;
 use rand::Rng;
 use rand::seq::SliceRandom;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
 
 /// Mirror attack cells around the piece (vertical = left/right, horizontal = up/down).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum AttackSymmetry {
     #[default]
     None,
@@ -30,7 +32,7 @@ impl AttackSymmetry {
 }
 
 /// Settings for the “Generate random pieces” action in the UI.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct RandomGenConfig {
     pub army_count_min: u32,
     pub army_count_max: u32,
@@ -40,8 +42,6 @@ pub struct RandomGenConfig {
     pub attack_radius_max: i32,
     /// Per eligible cell probability of being an attacked square (0..1).
     pub pattern_density: f32,
-    /// Per other-piece probability that this piece is blocked by them (0..1).
-    pub blocked_by_density: f32,
     pub attack_symmetry: AttackSymmetry,
 }
 
@@ -53,7 +53,6 @@ impl Default for RandomGenConfig {
             attack_radius_min: 1,
             attack_radius_max: 4,
             pattern_density: 0.35,
-            blocked_by_density: 0.5,
             attack_symmetry: AttackSymmetry::None,
         }
     }
@@ -72,7 +71,6 @@ impl RandomGenConfig {
         self.attack_radius_min = self.attack_radius_min.max(1);
         self.attack_radius_max = self.attack_radius_max.max(self.attack_radius_min);
         self.pattern_density = self.pattern_density.clamp(0.0, 1.0);
-        self.blocked_by_density = self.blocked_by_density.clamp(0.0, 1.0);
     }
 }
 
@@ -99,7 +97,7 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
                     cfg.attack_symmetry,
                 ),
             };
-            let blocked_by = random_blocked_by(rng, i, n, cfg.blocked_by_density);
+            let blocked_by = all_other_armies(i, n);
             Army {
                 name: format!("Piece {i}"),
                 color: colors[i],
@@ -152,6 +150,17 @@ fn push_if_legal(moves: &mut Vec<(i32, i32)>, x: i32, y: i32) {
     }
 }
 
+/// One representative per symmetry orbit so `pattern_density` is the per-cell inclusion rate
+/// after mirroring, not before (independent rolls on mirrored copies overshoot badly).
+fn is_canonical_attack_seed(x: i32, y: i32, symmetry: AttackSymmetry) -> bool {
+    match symmetry {
+        AttackSymmetry::None => true,
+        AttackSymmetry::Vertical => x > 0 || (x == 0 && y > 0),
+        AttackSymmetry::Horizontal => y > 0 || (y == 0 && x != 0),
+        AttackSymmetry::Both => (x > 0 && y >= 0) || (x == 0 && y > 0),
+    }
+}
+
 fn random_attack_pattern(
     rng: &mut impl Rng,
     radius_min: i32,
@@ -167,6 +176,9 @@ fn random_attack_pattern(
             }
             let d = chebyshev(x, y);
             if d < radius_min || d > radius_max {
+                continue;
+            }
+            if !is_canonical_attack_seed(x, y, symmetry) {
                 continue;
             }
             if rng.random::<f32>() < density {
@@ -193,15 +205,8 @@ fn normalize_moves(moves: &mut Vec<(i32, i32)>) {
     moves.dedup();
 }
 
-fn random_blocked_by(
-    rng: &mut impl Rng,
-    army: ArmyId,
-    n: usize,
-    density: f32,
-) -> Vec<ArmyId> {
-    (0..n)
-        .filter(|&other| other != army && rng.random::<f32>() < density)
-        .collect()
+fn all_other_armies(army: ArmyId, n: usize) -> Vec<ArmyId> {
+    (0..n).filter(|&other| other != army).collect()
 }
 
 fn random_army_palette(rng: &mut impl Rng, n: usize) -> Vec<Color> {
@@ -232,7 +237,7 @@ fn palette_color(rng: &mut impl Rng, hue: f32, slot: usize, slots: usize) -> Col
 fn colors_from_anchors(rng: &mut impl Rng, anchors: &[f32], n: usize) -> Vec<Color> {
     (0..n)
         .map(|i| {
-            let h = anchors[i % anchors.len()];
+            let h: f32 = anchors[i % anchors.len()];
             palette_color(rng, h, i, n)
         })
         .collect()
@@ -307,7 +312,6 @@ mod tests {
             attack_radius_min: 5,
             attack_radius_max: 1,
             pattern_density: 2.0,
-            blocked_by_density: -1.0,
             attack_symmetry: AttackSymmetry::Both,
         };
         cfg.sanitize();
@@ -316,7 +320,6 @@ mod tests {
         assert_eq!(cfg.attack_radius_min, 1);
         assert_eq!(cfg.attack_radius_max, 5);
         assert_eq!(cfg.pattern_density, 1.0);
-        assert_eq!(cfg.blocked_by_density, 0.0);
     }
 
     #[test]
@@ -336,6 +339,57 @@ mod tests {
     }
 
     #[test]
+    fn canonical_seeds_cover_each_orbit_once() {
+        assert!(is_canonical_attack_seed(2, 1, AttackSymmetry::Both));
+        assert!(!is_canonical_attack_seed(-2, 1, AttackSymmetry::Both));
+        assert!(is_canonical_attack_seed(2, 0, AttackSymmetry::Vertical));
+        assert!(!is_canonical_attack_seed(-2, 0, AttackSymmetry::Vertical));
+        assert!(is_canonical_attack_seed(0, 3, AttackSymmetry::Horizontal));
+        assert!(!is_canonical_attack_seed(0, -3, AttackSymmetry::Horizontal));
+    }
+
+    #[test]
+    fn pattern_density_matches_eligible_fraction_with_symmetry() {
+        fn eligible_count(rmin: i32, rmax: i32) -> usize {
+            let mut n = 0usize;
+            for y in -rmax..=rmax {
+                for x in -rmax..=rmax {
+                    if x == 0 && y == 0 {
+                        continue;
+                    }
+                    let d = chebyshev(x, y);
+                    if d >= rmin && d <= rmax {
+                        n += 1;
+                    }
+                }
+            }
+            n
+        }
+
+        let cfg = RandomGenConfig {
+            army_count_min: 1,
+            army_count_max: 1,
+            attack_radius_min: 1,
+            attack_radius_max: 4,
+            pattern_density: 0.2,
+            attack_symmetry: AttackSymmetry::Both,
+        };
+        let eligible = eligible_count(cfg.attack_radius_min, cfg.attack_radius_max);
+        let mut rng = StdRng::seed_from_u64(2026);
+        let mut filled = 0usize;
+        let trials = 400usize;
+        for _ in 0..trials {
+            let def = generate_random_game(&cfg, &mut rng);
+            filled += def.armies[0].piece.valid_moves.len();
+        }
+        let ratio = filled as f32 / (trials * eligible) as f32;
+        assert!(
+            (0.14..=0.26).contains(&ratio),
+            "expected ~0.2 fill ratio, got {ratio}"
+        );
+    }
+
+    #[test]
     fn random_palette_has_one_color_per_army() {
         let mut rng = StdRng::seed_from_u64(99);
         for n in 2..=8 {
@@ -352,17 +406,17 @@ mod tests {
             attack_radius_min: 2,
             attack_radius_max: 2,
             pattern_density: 1.0,
-            blocked_by_density: 0.0,
             attack_symmetry: AttackSymmetry::None,
         };
         let mut rng = StdRng::seed_from_u64(42);
         let def = generate_random_game(&cfg, &mut rng);
         assert_eq!(def.armies.len(), 3);
-        for army in &def.armies {
+        for (i, army) in def.armies.iter().enumerate() {
             assert!(!army.piece.valid_moves.is_empty());
             for &(x, y) in &army.piece.valid_moves {
                 assert_eq!(chebyshev(x, y), 2);
             }
+            assert_eq!(army.blocked_by, all_other_armies(i, 3));
         }
     }
 }

@@ -1,80 +1,25 @@
-use serde::{Deserialize, Serialize};
+pub const MIN_ZOOM_OUT: f32 = 0.5;
+pub const MAX_ZOOM_OUT_BUDGET: f32 = 100.0;
 
-#[cfg(not(target_family = "wasm"))]
-use std::path::PathBuf;
-
-pub const DEFAULT_PROBE_TIME_BUDGET_SECS: f32 = 2.0;
-
-pub fn default_probe_time_budget() -> f32 {
-    DEFAULT_PROBE_TIME_BUDGET_SECS
-}
-
-#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
-pub struct CalibrationSettings {
-    /// Largest orthographic scale (zoom-out) this machine should use.
-    pub max_zoom_out_scale: f32,
-    /// Wall-clock time allowed per calibration probe before it is cancelled.
-    #[serde(default = "default_probe_time_budget")]
-    pub probe_time_budget_secs: f32,
-}
-
-impl CalibrationSettings {
-    pub fn clamp_budget(budget: f32) -> f32 {
-        budget.clamp(0.5, 60.0)
-    }
-}
-
-#[cfg(not(target_family = "wasm"))]
-pub fn config_file_path() -> PathBuf {
-    let base = dirs::config_dir().unwrap_or_else(|| PathBuf::from("."));
-    base.join("red_black_knights").join("calibration.toml")
-}
-
-#[cfg(not(target_family = "wasm"))]
-pub fn load() -> Option<CalibrationSettings> {
-    if smoke_test_mode() {
-        return None;
-    }
-    let path = config_file_path();
-    let text = std::fs::read_to_string(&path).ok()?;
-    let mut settings: CalibrationSettings = toml::from_str(&text).ok()?;
-    settings.probe_time_budget_secs =
-        CalibrationSettings::clamp_budget(settings.probe_time_budget_secs);
-    if settings.max_zoom_out_scale.is_finite() && settings.max_zoom_out_scale > 0.0 {
-        Some(settings)
+/// Zoom-out ceiling: at most [`MAX_ZOOM_OUT_BUDGET`], and never above GPU texture limit.
+pub fn zoom_out_budget_ceiling(gpu_safe_max: f32) -> f32 {
+    if gpu_safe_max.is_finite() && gpu_safe_max > 0.0 {
+        MAX_ZOOM_OUT_BUDGET.min(gpu_safe_max)
     } else {
-        None
+        MAX_ZOOM_OUT_BUDGET
     }
+}
+
+pub fn effective_zoom_out_max(gpu_safe_max: f32, pan_max_scale: f32) -> f32 {
+    pan_max_scale.min(zoom_out_budget_ceiling(gpu_safe_max))
 }
 
 #[cfg(not(target_family = "wasm"))]
-pub fn save(settings: &CalibrationSettings) -> std::io::Result<()> {
-    if smoke_test_mode() {
-        return Ok(());
-    }
-    let path = config_file_path();
-    if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    let mut settings = *settings;
-    settings.probe_time_budget_secs =
-        CalibrationSettings::clamp_budget(settings.probe_time_budget_secs);
-    let text = toml::to_string_pretty(&settings)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
-    std::fs::write(path, text)
-}
-
-#[cfg(target_family = "wasm")]
-pub fn load() -> Option<CalibrationSettings> {
-    None
-}
-
-#[cfg(target_family = "wasm")]
-pub fn save(_settings: &CalibrationSettings) -> std::io::Result<()> {
-    Ok(())
-}
-
-#[cfg(not(target_family = "wasm"))]
-fn smoke_test_mode() -> bool {
+pub fn smoke_test_mode() -> bool {
     std::env::args().any(|a| a == "--smoke-test")
+}
+
+#[cfg(target_family = "wasm")]
+pub fn smoke_test_mode() -> bool {
+    false
 }

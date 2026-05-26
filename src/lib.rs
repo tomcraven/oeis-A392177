@@ -1,7 +1,9 @@
-pub mod calibration;
 pub mod calibration_config;
 pub mod camera;
 pub mod camera_config;
+pub mod discover;
+pub mod discover_catalog;
+pub mod game_snapshot;
 pub mod model;
 pub mod mutate;
 pub mod random_gen;
