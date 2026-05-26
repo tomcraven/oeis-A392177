@@ -109,7 +109,7 @@ fn preset_index_for_def(def: &GameDefinition) -> Option<usize> {
     GameDefinition::preset_catalog()
         .iter()
         .enumerate()
-        .find(|(_, (_, factory))| factory().same_applied_state(def))
+        .find(|(_, (_, factory))| factory().same_sim_state(def))
         .map(|(i, _)| i)
 }
 
@@ -809,13 +809,16 @@ pub fn ui_game_definition(
         });
     viewport.left_inset_px = panel_response.response.rect.width();
 
-    if !draft.same_applied_state(def.as_ref()) {
+    if !draft.same_sim_state(def.as_ref()) {
         dedupe_moves(&mut draft);
         *def = draft.clone();
         sim.request_reset(def.clone());
         cache.rendered_bounds = None;
         viewport.bounds = None;
         viewport.target_index = 0;
+        viewport.render_dirty = true;
+    } else if !draft.same_applied_state(def.as_ref()) {
+        *def = draft.clone();
         viewport.render_dirty = true;
     }
 
