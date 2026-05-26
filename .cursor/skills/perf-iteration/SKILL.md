@@ -9,6 +9,8 @@ description: Run accuracy-preserving performance improvement loops for this Rust
 
 Optimize with evidence. Before changing the algorithm, add or confirm correctness tests, capture a release-mode timing baseline, then keep only changes that preserve exact outputs and improve measured runtime.
 
+Read [`OPTIMISATION.md`](../../OPTIMISATION.md) before proposing sim CPU work: it lists guardrails, verified timings, changes already in the tree, and experiments that regressed (threading, SIMD/SWAR, occupancy skips, and similar). Do not repeat failed approaches unless you have a new hypothesis and a fresh A/B plan.
+
 ## Workflow
 
 1. Identify the hot path and existing invariants.
@@ -34,7 +36,7 @@ Run timing in release mode only:
 cargo rund --release --bin time_sim
 ```
 
-Optional env vars: `TIME_SIM_ITERS` (default 15), `TIME_SIM_WARMUP` (default 2). Output includes mean, median, and stdev milliseconds per case.
+Optional env vars: `TIME_SIM_ITERS` (default 15), `TIME_SIM_WARMUP` (default 2). Output includes mean, median, and stdev milliseconds per case. Record results in [`OPTIMISATION.md`](../../OPTIMISATION.md) when a change is kept or definitively rejected.
 
 If the timing harness does not exist yet, add a small binary at `src/bin/time_sim.rs` that:
 
