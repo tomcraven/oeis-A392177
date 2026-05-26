@@ -22,16 +22,16 @@ Optimize with evidence. Before changing the algorithm, add or confirm correctnes
 
 ## Commands For This Repo
 
-Use dynamic linking for faster Bevy-linked builds:
+Use the [`.cargo/config.toml`](../../.cargo/config.toml) aliases (see **cargo-dev-aliases** skill):
 
 ```bash
-cargo test --features bevy/dynamic_linking
+cargo testd
 ```
 
 Run timing in release mode only:
 
 ```bash
-cargo run --release --features bevy/dynamic_linking --bin time_sim
+cargo rund --release --bin time_sim
 ```
 
 If the timing harness does not exist yet, add a small binary at `src/bin/time_sim.rs` that:

@@ -1,6 +1,9 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
+use crate::camera::BoardCamera;
+use crate::calibration::{CalibrationGate, UserMaxZoomOut};
+use crate::calibration_config::{self, CalibrationSettings};
 use crate::CELL_SIZE;
 use crate::camera::PendingCameraAction;
 use crate::model::{Army, GameDefinition, PieceDef};
@@ -12,7 +15,7 @@ use crate::mutate::{
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
-use crate::viewport::ViewportState;
+use crate::viewport::{self, ViewportState};
 
 #[derive(Resource)]
 pub struct UiState {
@@ -20,11 +23,11 @@ pub struct UiState {
     /// When true, any draft change that affects the sim is applied automatically.
     pub auto_update: bool,
     pub random_gen: RandomGenConfig,
-    /// Army index targeted by the Mutate section (when `mutate_all` is false).
+    /// Piece index targeted by the Mutate section (when `mutate_all` is false).
     pub mutate_army: usize,
     pub mutate_all: bool,
     pub preset_index: usize,
-    /// Army shown in the Armies editor dropdown.
+    /// Piece shown in the Pieces editor dropdown.
     pub edit_army: usize,
 }
 
@@ -56,7 +59,9 @@ pub fn ui_game_definition(
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
-    camera_q: Query<&Projection, With<Camera2d>>,
+    mut calibration: ResMut<CalibrationGate>,
+    mut user_max: ResMut<UserMaxZoomOut>,
+    camera_q: Query<&Projection, With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
     let Ok(ctx) = contexts.ctx_mut() else {
@@ -80,6 +85,61 @@ pub fn ui_game_definition(
                     if ui.button("Center view").clicked() {
                         camera_actions.center_view = true;
                     }
+                    ui.collapsing("View", |ui| {
+                        let gpu_cap =
+                            if let (Ok(Projection::Orthographic(ortho)), Ok(window)) =
+                                (camera_q.single(), window_q.single())
+                            {
+                                viewport::max_safe_zoom_out_scale(
+                                    ortho,
+                                    window,
+                                    viewport.left_inset_px,
+                                )
+                            } else {
+                                64.0
+                            };
+                        let slider_hi = gpu_cap.max(1.0);
+                        let mut max_zoom = if user_max.scale.is_finite()
+                            && user_max.scale < f32::MAX
+                        {
+                            user_max.scale
+                        } else {
+                            slider_hi.min(6.0).max(1.0)
+                        };
+                        max_zoom = max_zoom.clamp(0.05, slider_hi);
+                        ui.label("Zoom-out budget");
+                        let slider = ui
+                            .add(
+                                egui::Slider::new(&mut max_zoom, 0.5..=slider_hi)
+                                    .logarithmic(true)
+                                    .text("max scale"),
+                            )
+                            .on_hover_text(
+                                "How far you can zoom out. Higher values mean larger grids and \
+                                 longer loads when panning or switching presets.",
+                            );
+                        if slider.changed() {
+                            user_max.scale = max_zoom;
+                            let _ = calibration_config::save(&CalibrationSettings {
+                                max_zoom_out_scale: max_zoom,
+                                probe_time_budget_secs: calibration.probe_time_budget_secs,
+                            });
+                        }
+                        ui.horizontal(|ui| {
+                            ui.label(format!("Current zoom cap: {max_zoom:.2}"));
+                            ui.weak(format!("(GPU ~{slider_hi:.0})"));
+                        });
+                        if !calibration.is_running()
+                            && ui
+                                .button("Suggest max from machine")
+                                .on_hover_text(
+                                    "Run a quick calibration benchmark and set the slider to its result.",
+                                )
+                                .clicked()
+                        {
+                            calibration.request_recalibrate();
+                        }
+                    });
                     ui.checkbox(&mut ui_state.auto_update, "Auto update simulation");
                     ui.separator();
 
@@ -116,7 +176,7 @@ pub fn ui_game_definition(
 
                     ui.collapsing("Random generator", |ui| {
                         let rg = &mut ui_state.random_gen;
-                        ui.label("Army count range");
+                        ui.label("Piece count range");
                         ui.horizontal(|ui| {
                             ui.add(
                                 egui::DragValue::new(&mut rg.army_count_min)
@@ -168,7 +228,7 @@ pub fn ui_game_definition(
                                 .text("blocked-by density"),
                         );
 
-                        if ui.button("Generate random armies").clicked() {
+                        if ui.button("Generate random pieces").clicked() {
                             rg.sanitize();
                             let mut rng = rand::rng();
                             draft = generate_random_game(rg, &mut rng);
@@ -177,9 +237,9 @@ pub fn ui_game_definition(
 
                     ui.separator();
 
-                    ui.collapsing("Army summary", |ui| {
+                    ui.collapsing("Piece summary", |ui| {
                         if draft.armies.is_empty() {
-                            ui.label("No armies");
+                            ui.label("No pieces");
                         } else {
                             let row_h = draft
                                 .armies
@@ -226,7 +286,7 @@ pub fn ui_game_definition(
 
                     ui.collapsing("Mutate", |ui| {
                         if draft.armies.is_empty() {
-                            ui.label("No armies");
+                            ui.label("No pieces");
                         } else {
                             if !ui_state.mutate_all
                                 && ui_state.mutate_army >= draft.armies.len()
@@ -372,9 +432,9 @@ pub fn ui_game_definition(
                         }
                     });
 
-                    ui.collapsing("Armies", |ui| {
+                    ui.collapsing("Pieces", |ui| {
                         if draft.armies.is_empty() {
-                            ui.label("No armies");
+                            ui.label("No pieces");
                         } else {
                             if ui_state.edit_army >= draft.armies.len() {
                                 ui_state.edit_army = draft.armies.len() - 1;
@@ -442,10 +502,10 @@ pub fn ui_game_definition(
                             }
 
                             ui.horizontal(|ui| {
-                                if ui.button("Add army").clicked() {
+                                if ui.button("Add piece").clicked() {
                                     let id = draft.armies.len();
                                     draft.armies.push(Army {
-                                        name: format!("Army {id}"),
+                                        name: format!("Piece {id}"),
                                         color: Color::srgb(0.5, 0.5, 0.5),
                                         piece: PieceDef::knight(),
                                         blocked_by: vec![],
@@ -454,7 +514,7 @@ pub fn ui_game_definition(
                                     ui_state.edit_army = id;
                                 }
                                 if draft.armies.len() > 1
-                                    && ui.button("Remove army").clicked()
+                                    && ui.button("Remove piece").clicked()
                                 {
                                     draft.armies.remove(army_idx);
                                     for army in &mut draft.armies {
@@ -501,21 +561,8 @@ pub fn ui_game_definition(
                         apply_clicked = true;
                     }
 
-                    let min_cursor = sim
-                        .display
-                        .cursors
-                        .iter()
-                        .copied()
-                        .min()
-                        .unwrap_or(0);
                     ui.separator();
-                    ui.label(format!("Placements: {}", sim.display.placements_len));
-                    ui.label(format!("Min cursor: {min_cursor}"));
-                    if viewport.simulation_pending || sim.is_busy() {
-                        ui.label(format!("Simulating to index {}", viewport.target_index));
-                    }
-                    ui.separator();
-                    ui.label("Debug");
+                    ui.collapsing("Debug", |ui| {
                     if let Some(bounds) = viewport.bounds {
                         let grid_size = grid_texture_size(bounds);
                         ui.label(format!("Grid cells: {} x {}", grid_size.x, grid_size.y));
@@ -531,11 +578,11 @@ pub fn ui_game_definition(
                     if let (Ok(Projection::Orthographic(ortho)), Ok(window)) =
                         (camera_q.single(), window_q.single())
                     {
-                        let world_per_screen_px =
-                            (ortho.area.width() * ortho.scale) / window.width().max(1.0);
-                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
                         let board_width_px =
                             (window.width() - viewport.left_inset_px).ceil().max(1.0);
+                        let world_per_screen_px =
+                            ortho.area.width() / board_width_px.max(1.0);
+                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
                         let board_pixels =
                             board_width_px as u64 * window.height().ceil().max(1.0) as u64;
                         ui.label(format!("Zoom scale: {:.3}", ortho.scale));
@@ -543,6 +590,7 @@ pub fn ui_game_definition(
                         ui.label(format!("Board pixels: {board_pixels}"));
                         ui.label(format!("Left inset px: {:.0}", viewport.left_inset_px));
                     }
+                    });
                 });
         });
     viewport.left_inset_px = panel_response.response.rect.width();
@@ -562,6 +610,130 @@ pub fn ui_game_definition(
     }
 
     ui_state.draft = Some(draft);
+}
+
+/// Pan/zoom on the board while calibration is active.
+pub fn board_camera_active(calibration: Res<CalibrationGate>) -> bool {
+    !calibration.is_running()
+}
+
+fn sim_catchup_progress(viewport: &ViewportState, sim: &SimulationBridge) -> Option<f32> {
+    if viewport.is_interactively_moving() {
+        return None;
+    }
+    let target = viewport.target_index;
+    if target == 0 {
+        return Some(0.0);
+    }
+    if !sim.needs_work(target) {
+        return Some(1.0);
+    }
+    let min_cursor = sim
+        .display
+        .cursors
+        .iter()
+        .copied()
+        .min()
+        .unwrap_or(0);
+    Some((min_cursor as f32 / target as f32).clamp(0.0, 1.0))
+}
+
+pub fn sim_catchup_overlay(
+    mut contexts: EguiContexts,
+    calibration: Res<CalibrationGate>,
+    viewport: Res<ViewportState>,
+    sim: Res<SimulationBridge>,
+) {
+    if calibration.is_running() || !viewport.simulation_pending {
+        return;
+    }
+    let Ok(ctx) = contexts.ctx_mut() else {
+        return;
+    };
+
+    let screen = ctx.content_rect();
+    let left = viewport.left_inset_px;
+    if left >= screen.width() {
+        return;
+    }
+    let board = egui::Rect::from_min_max(
+        egui::pos2(screen.min.x + left, screen.min.y),
+        screen.max,
+    );
+
+    let progress = sim_catchup_progress(&viewport, &sim);
+    let status = if progress.is_none() {
+        "Preparing simulation…"
+    } else {
+        "Simulating…"
+    };
+
+    const BAR_W: f32 = 240.0;
+    const BAR_H: f32 = 6.0;
+    const PANEL_H: f32 = 40.0;
+    const MARGIN: f32 = 10.0;
+    const H_PAD: f32 = 10.0;
+    let panel_rect = egui::Rect::from_min_max(
+        egui::pos2(
+            board.center().x - BAR_W * 0.5 - H_PAD,
+            board.max.y - PANEL_H - MARGIN,
+        ),
+        egui::pos2(board.center().x + BAR_W * 0.5 + H_PAD, board.max.y - MARGIN),
+    );
+    let bar_rect = egui::Rect::from_min_max(
+        egui::pos2(panel_rect.min.x + H_PAD, panel_rect.max.y - 8.0 - BAR_H),
+        egui::pos2(panel_rect.max.x - H_PAD, panel_rect.max.y - 8.0),
+    );
+
+    egui::Area::new(egui::Id::new("sim_catchup_overlay"))
+        .order(egui::Order::Foreground)
+        .interactable(false)
+        .fixed_pos(panel_rect.min)
+        .show(ctx, |ui| {
+            ui.allocate_exact_size(panel_rect.size(), egui::Sense::empty());
+            let painter = ui.painter();
+            painter.rect_filled(
+                panel_rect,
+                4.0,
+                egui::Color32::from_rgba_unmultiplied(12, 12, 18, 210),
+            );
+            painter.text(
+                egui::pos2(panel_rect.min.x + 10.0, panel_rect.min.y + 6.0),
+                egui::Align2::LEFT_TOP,
+                status,
+                egui::FontId::proportional(12.0),
+                egui::Color32::LIGHT_GRAY,
+            );
+            painter.rect_filled(bar_rect, 3.0, egui::Color32::from_gray(40));
+            match progress {
+                Some(p) => {
+                    let fill = egui::Rect::from_min_max(
+                        bar_rect.min,
+                        egui::pos2(bar_rect.min.x + bar_rect.width() * p, bar_rect.max.y),
+                    );
+                    painter.rect_filled(fill, 3.0, egui::Color32::from_rgb(120, 140, 180));
+                    painter.text(
+                        egui::pos2(panel_rect.max.x - 10.0, panel_rect.min.y + 6.0),
+                        egui::Align2::RIGHT_TOP,
+                        format!("{:.0}%", p * 100.0),
+                        egui::FontId::proportional(12.0),
+                        egui::Color32::GRAY,
+                    );
+                }
+                None => {
+                    let t = ui.input(|i| i.time) as f32;
+                    let pulse = (t * 2.5).sin() * 0.5 + 0.5;
+                    let fill = egui::Rect::from_min_max(
+                        bar_rect.min,
+                        egui::pos2(
+                            bar_rect.min.x + bar_rect.width() * pulse * 0.35,
+                            bar_rect.max.y,
+                        ),
+                    );
+                    painter.rect_filled(fill, 3.0, egui::Color32::from_rgb(120, 140, 180));
+                }
+            }
+        });
 }
 
 fn dedupe_moves(def: &mut GameDefinition) {

@@ -2,8 +2,13 @@ use bevy::prelude::*;
 use std::time::Duration;
 
 use crate::CELL_SIZE;
+use crate::camera::BoardCamera;
 use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
+
+/// Default window size (side panel + rectangular board region).
+pub const WINDOW_WIDTH: f32 = 1440.0;
+pub const WINDOW_HEIGHT: f32 = 900.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct GridBounds {
@@ -67,15 +72,14 @@ pub fn grid_to_world(x: i32, y: i32) -> Vec2 {
 pub fn viewport_grid_bounds(
     camera_transform: &Transform,
     ortho: &OrthographicProjection,
-    window: &Window,
-    left_inset_px: f32,
+    _window: &Window,
+    _left_inset_px: f32,
 ) -> GridBounds {
-    let world_w = ortho.area.width() * ortho.scale;
-    let half_w = world_w * 0.5;
-    let half_h = ortho.area.height() * ortho.scale * 0.5;
+    // `OrthographicProjection::area` is the visible world size (scale already applied).
+    let half_w = ortho.area.width() * 0.5;
+    let half_h = ortho.area.height() * 0.5;
     let center = camera_transform.translation.truncate();
-    let left_inset_fraction = (left_inset_px / window.width().max(1.0)).clamp(0.0, 0.95);
-    let min_world_x = center.x - half_w + world_w * left_inset_fraction;
+    let min_world_x = center.x - half_w;
     let max_world_x = center.x + half_w;
 
     let corners = [
@@ -119,20 +123,21 @@ fn max_visible_spiral_index(bounds: GridBounds) -> u32 {
     max_index
 }
 
-const INDEX_MARGIN: u32 = 64;
+const INDEX_MARGIN: u32 = 24;
 const SIM_FRAME_BUDGET: Duration = Duration::from_millis(16);
-/// Conservative cap under the usual 16384 GPU limit (grid texture is one texel per cell).
-const GPU_MAX_GRID_TEXTURE_DIMENSION: f32 = 16_000.0;
+/// Cap at the usual 16384 GPU limit (grid texture is one texel per cell).
+const GPU_MAX_GRID_TEXTURE_DIMENSION: f32 = 16_384.0;
 
 /// Largest orthographic scale before the visible grid would exceed GPU texture limits.
 pub fn max_safe_zoom_out_scale(
     ortho: &OrthographicProjection,
-    window: &Window,
-    left_inset_px: f32,
+    _window: &Window,
+    _left_inset_px: f32,
 ) -> f32 {
-    let inset = (left_inset_px / window.width().max(1.0)).clamp(0.0, 0.95);
-    let board_w = ortho.area.width() * (1.0 - inset);
-    let board_h = ortho.area.height();
+    // Board camera viewport matches `ortho.area`; no side-panel inset in world space.
+    let scale = ortho.scale.max(1e-6);
+    let board_w = ortho.area.width() / scale;
+    let board_h = ortho.area.height() / scale;
     let cell_budget = GPU_MAX_GRID_TEXTURE_DIMENSION - 4.0;
 
     let max_scale_w = if board_w > 0.0 {
@@ -148,10 +153,33 @@ pub fn max_safe_zoom_out_scale(
     max_scale_w.min(max_scale_h)
 }
 
+/// Restrict the game camera to the board rectangle (right of the egui side panel).
+pub fn sync_board_camera_viewport(
+    viewport: Res<ViewportState>,
+    window_q: Query<&Window>,
+    mut cameras: Query<&mut Camera, With<BoardCamera>>,
+) {
+    let Ok(window) = window_q.single() else {
+        return;
+    };
+    let Ok(mut camera) = cameras.single_mut() else {
+        return;
+    };
+    let scale = window.scale_factor();
+    let left = (viewport.left_inset_px * scale).round().max(0.0) as u32;
+    let phys_w = window.physical_width().saturating_sub(left).max(1);
+    let phys_h = window.physical_height().max(1);
+    camera.viewport = Some(bevy::camera::Viewport {
+        physical_position: UVec2::new(left, 0),
+        physical_size: UVec2::new(phys_w, phys_h),
+        depth: 0.0..1.0,
+    });
+}
+
 pub fn sync_simulation_to_viewport(
     mut sim: ResMut<SimulationBridge>,
     mut viewport: ResMut<ViewportState>,
-    camera_q: Query<(&Transform, &Projection), With<Camera2d>>,
+    camera_q: Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
     let Ok((transform, projection)) = camera_q.single() else {

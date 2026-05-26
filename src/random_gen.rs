@@ -29,7 +29,7 @@ impl AttackSymmetry {
     }
 }
 
-/// Settings for the “Generate random armies” action in the UI.
+/// Settings for the “Generate random pieces” action in the UI.
 #[derive(Clone, Debug)]
 pub struct RandomGenConfig {
     pub army_count_min: u32,
@@ -40,7 +40,7 @@ pub struct RandomGenConfig {
     pub attack_radius_max: i32,
     /// Per eligible cell probability of being an attacked square (0..1).
     pub pattern_density: f32,
-    /// Per other-army probability that this army is blocked by them (0..1).
+    /// Per other-piece probability that this piece is blocked by them (0..1).
     pub blocked_by_density: f32,
     pub attack_symmetry: AttackSymmetry,
 }
@@ -86,6 +86,8 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
         rng.random_range(cfg.army_count_min..=cfg.army_count_max) as usize
     };
 
+    let colors = random_army_palette(rng, n);
+
     let armies: Vec<Army> = (0..n)
         .map(|i| {
             let piece = PieceDef {
@@ -99,8 +101,8 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
             };
             let blocked_by = random_blocked_by(rng, i, n, cfg.blocked_by_density);
             Army {
-                name: format!("Army {i}"),
-                color: army_hue(i, n),
+                name: format!("Piece {i}"),
+                color: colors[i],
                 piece,
                 blocked_by,
             }
@@ -202,9 +204,93 @@ fn random_blocked_by(
         .collect()
 }
 
-fn army_hue(i: usize, n: usize) -> Color {
-    let t = i as f32 / n.max(1) as f32;
-    Color::hsl(t * 360.0, 0.65, 0.5)
+fn random_army_palette(rng: &mut impl Rng, n: usize) -> Vec<Color> {
+    if n == 0 {
+        return Vec::new();
+    }
+    let base = rng.random_range(0.0f32..360.0);
+    let mut colors = match rng.random_range(0..6) {
+        0 => palette_analogous(rng, base, n),
+        1 => palette_triadic(rng, base, n),
+        2 => palette_complementary(rng, base, n),
+        3 => palette_split_complementary(rng, base, n),
+        4 => palette_tetradic(rng, base, n),
+        _ => palette_accents(rng, base, n),
+    };
+    colors.shuffle(rng);
+    colors
+}
+
+fn palette_color(rng: &mut impl Rng, hue: f32, slot: usize, slots: usize) -> Color {
+    let hue_jitter = rng.random_range(-6.0..6.0);
+    let s = rng.random_range(0.58..0.86);
+    let l_center = 0.48 + (slot as f32 / slots.max(1) as f32) * 0.14;
+    let l = (l_center + rng.random_range(-0.05..0.05)).clamp(0.38, 0.68);
+    hsl(hue + hue_jitter, s, l)
+}
+
+fn colors_from_anchors(rng: &mut impl Rng, anchors: &[f32], n: usize) -> Vec<Color> {
+    (0..n)
+        .map(|i| {
+            let h = anchors[i % anchors.len()];
+            palette_color(rng, h, i, n)
+        })
+        .collect()
+}
+
+/// Neighbouring hues on the wheel — cohesive but not monochrome.
+fn palette_analogous(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    let spread = rng.random_range(35.0..85.0);
+    let start = base - spread * 0.5;
+    (0..n)
+        .map(|i| {
+            let t = i as f32 / (n - 1).max(1) as f32;
+            palette_color(rng, start + t * spread, i, n)
+        })
+        .collect()
+}
+
+fn palette_triadic(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    colors_from_anchors(rng, &[base, base + 120.0, base + 240.0], n)
+}
+
+fn palette_complementary(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    colors_from_anchors(rng, &[base, base + 180.0], n)
+}
+
+fn palette_split_complementary(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    colors_from_anchors(rng, &[base, base + 150.0, base + 210.0], n)
+}
+
+fn palette_tetradic(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    colors_from_anchors(rng, &[base, base + 90.0, base + 180.0, base + 270.0], n)
+}
+
+/// One vivid hue plus muted neighbours — good contrast on a dark board.
+fn palette_accents(rng: &mut impl Rng, base: f32, n: usize) -> Vec<Color> {
+    let mut out = Vec::with_capacity(n);
+    let accent_idx = rng.random_range(0..n);
+    for i in 0..n {
+        let h = base + (i as f32 - accent_idx as f32) * rng.random_range(18.0..32.0);
+        if i == accent_idx {
+            out.push(hsl(
+                h + rng.random_range(-4.0..4.0),
+                rng.random_range(0.72..0.92),
+                rng.random_range(0.50..0.62),
+            ));
+        } else {
+            out.push(hsl(
+                h + rng.random_range(-8.0..8.0),
+                rng.random_range(0.45..0.62),
+                rng.random_range(0.42..0.56),
+            ));
+        }
+    }
+    out
+}
+
+fn hsl(h: f32, s: f32, l: f32) -> Color {
+    Color::hsl(h.rem_euclid(360.0), s.clamp(0.0, 1.0), l.clamp(0.0, 1.0))
 }
 
 #[cfg(test)]
@@ -247,6 +333,15 @@ mod tests {
         assert!(moves.contains(&(-2, 1)));
         assert!(moves.contains(&(2, -1)));
         assert!(moves.contains(&(-2, -1)));
+    }
+
+    #[test]
+    fn random_palette_has_one_color_per_army() {
+        let mut rng = StdRng::seed_from_u64(99);
+        for n in 2..=8 {
+            let colors = random_army_palette(&mut rng, n);
+            assert_eq!(colors.len(), n);
+        }
     }
 
     #[test]

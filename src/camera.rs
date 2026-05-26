@@ -2,6 +2,7 @@ use bevy::input::mouse::{MouseScrollUnit, MouseWheel};
 use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
 
+use crate::calibration::{CalibrationGate, UserMaxZoomOut};
 use crate::camera_config::{CameraSessionConfig, load, save};
 use crate::viewport::grid_to_world;
 
@@ -14,8 +15,12 @@ pub struct PendingCameraAction {
 }
 
 #[derive(Component)]
+pub struct BoardCamera;
+
+#[derive(Component)]
 pub struct PanCamera {
-    pub pan_speed: f32,
+    /// How many viewport widths per second to pan at full WASD input (zoom-invariant on screen).
+    pub pan_screen_widths_per_sec: f32,
     pub zoom_speed: f32,
     pub min_scale: f32,
     pub max_scale: f32,
@@ -24,10 +29,10 @@ pub struct PanCamera {
 impl Default for PanCamera {
     fn default() -> Self {
         Self {
-            pan_speed: 400.0,
+            pan_screen_widths_per_sec: 0.65,
             zoom_speed: 0.12,
             min_scale: 0.05,
-            max_scale: 1024.0,
+            max_scale: 8192.0,
         }
     }
 }
@@ -35,9 +40,12 @@ impl Default for PanCamera {
 pub fn camera_controls(
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
-    mut query: Query<(&mut Transform, &PanCamera), With<Camera2d>>,
+    mut query: Query<(&mut Transform, &PanCamera, &Projection), With<BoardCamera>>,
 ) {
-    let Ok((mut transform, pan)) = query.single_mut() else {
+    let Ok((mut transform, pan, projection)) = query.single_mut() else {
+        return;
+    };
+    let Projection::Orthographic(ortho) = projection else {
         return;
     };
 
@@ -55,8 +63,11 @@ pub fn camera_controls(
         delta.x += 1.0;
     }
     if delta != Vec2::ZERO {
+        // `OrthographicProjection::area` already includes `scale` (see Bevy camera update).
+        let visible_world_width = ortho.area.width();
+        let world_per_sec = pan.pan_screen_widths_per_sec * visible_world_width;
         transform.translation +=
-            (delta.normalize() * pan.pan_speed * time.delta_secs()).extend(0.0);
+            (delta.normalize() * world_per_sec * time.delta_secs()).extend(0.0);
     }
 }
 
@@ -64,8 +75,8 @@ pub fn camera_controls(
 pub fn camera_zoom_controls(
     egui_wants: Res<EguiWantsInput>,
     mut mouse_wheel: MessageReader<MouseWheel>,
-    mut query: Query<&mut Projection, With<Camera2d>>,
-    pan_q: Query<&PanCamera, With<Camera2d>>,
+    mut query: Query<&mut Projection, With<BoardCamera>>,
+    pan_q: Query<&PanCamera, With<BoardCamera>>,
 ) {
     let Ok(mut projection) = query.single_mut() else {
         return;
@@ -90,10 +101,16 @@ pub fn camera_zoom_controls(
 }
 
 pub fn clamp_camera_zoom_to_texture_limit(
+    gate: Res<CalibrationGate>,
     viewport: Res<crate::viewport::ViewportState>,
+    user_max: Res<UserMaxZoomOut>,
     window_q: Query<&Window>,
-    mut query: Query<(&PanCamera, &mut Projection), With<Camera2d>>,
+    mut query: Query<(&PanCamera, &mut Projection), With<BoardCamera>>,
 ) {
+    if gate.is_running() {
+        // Calibration drives `ortho.scale` via probe ramps; don't clamp to the saved cap.
+        return;
+    }
     let Ok(window) = window_q.single() else {
         return;
     };
@@ -105,13 +122,13 @@ pub fn clamp_camera_zoom_to_texture_limit(
     };
     let safe_max =
         crate::viewport::max_safe_zoom_out_scale(ortho, window, viewport.left_inset_px);
-    let effective_max = pan.max_scale.min(safe_max);
+    let effective_max = pan.max_scale.min(safe_max).min(user_max.scale);
     ortho.scale = ortho.scale.clamp(pan.min_scale, effective_max);
 }
 
 pub fn apply_camera_actions(
     mut pending: ResMut<PendingCameraAction>,
-    mut query: Query<&mut Transform, With<Camera2d>>,
+    mut query: Query<&mut Transform, With<BoardCamera>>,
 ) {
     if !pending.center_view {
         return;
@@ -126,7 +143,8 @@ pub fn apply_camera_actions(
 }
 
 pub fn apply_saved_camera_session(
-    mut query: Query<(&mut Transform, &mut Projection), With<Camera2d>>,
+    user_max: Res<UserMaxZoomOut>,
+    mut query: Query<(&mut Transform, &mut Projection), With<BoardCamera>>,
 ) {
     let Some(saved) = load() else {
         return;
@@ -137,14 +155,18 @@ pub fn apply_saved_camera_session(
     transform.translation.x = saved.x;
     transform.translation.y = saved.y;
     if let Projection::Orthographic(ref mut ortho) = *projection {
-        ortho.scale = saved.zoom;
+        ortho.scale = saved.zoom.clamp(0.05, user_max.scale);
     }
 }
 
 pub fn persist_camera_session(
-    query: Query<(&Transform, &Projection), With<Camera2d>>,
+    gate: Res<crate::calibration::CalibrationGate>,
+    query: Query<(&Transform, &Projection), With<BoardCamera>>,
     mut last: ResMut<LastSavedCamera>,
 ) {
+    if gate.is_running() {
+        return;
+    }
     let Ok((transform, projection)) = query.single() else {
         return;
     };
