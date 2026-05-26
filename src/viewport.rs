@@ -6,6 +6,16 @@ use crate::camera::BoardCamera;
 use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
 
+/// How board zoom is controlled.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BoardZoomMode {
+    #[default]
+    Free,
+    /// Uniform scale so one simulation cell spans one screen pixel on the tighter axis; the
+    /// other axis simulates extra cells (scroll zoom disabled).
+    OnePixelPerCell,
+}
+
 /// Default window size (side panel + rectangular board region).
 pub const WINDOW_WIDTH: f32 = 1440.0;
 pub const WINDOW_HEIGHT: f32 = 900.0;
@@ -24,6 +34,7 @@ pub struct ViewportState {
     pub target_index: u32,
     pub render_dirty: bool,
     pub left_inset_px: f32,
+    pub zoom_mode: BoardZoomMode,
 }
 
 impl GridBounds {
@@ -134,6 +145,21 @@ pub fn max_safe_zoom_out_scale(
     max_scale_w.min(max_scale_h)
 }
 
+/// Orthographic [`OrthographicProjection::scale`] for [`BoardZoomMode::OnePixelPerCell`].
+///
+/// With Bevy [`ScalingMode::WindowSize`], world size in pixels ≈ `world_units / scale`. Each sim
+/// cell is [`CELL_SIZE`] world units wide on the board sprite, so `scale == CELL_SIZE` ⇒ one cell
+/// per screen pixel. Extra sim work on one axis comes from non-square viewports in
+/// [`viewport_grid_bounds`], not from a different scale.
+pub fn ortho_scale_for_one_pixel_per_cell() -> f32 {
+    CELL_SIZE
+}
+
+/// Screen pixels per simulation cell (uniform); ~1.0 when `scale ≈ CELL_SIZE`.
+pub fn cells_per_screen_pixel(ortho: &OrthographicProjection) -> f32 {
+    ortho.scale / CELL_SIZE
+}
+
 /// Restrict the game camera to the board rectangle (right of the egui side panel).
 pub fn sync_board_camera_viewport(
     viewport: Res<ViewportState>,
@@ -189,5 +215,19 @@ pub fn sync_simulation_to_viewport(
         sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
     } else if sim.needs_work(viewport.target_index) && !sim.is_busy() {
         sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn one_pixel_per_cell_scale_is_cell_size() {
+        assert_eq!(ortho_scale_for_one_pixel_per_cell(), CELL_SIZE);
+        assert!((cells_per_screen_pixel(&OrthographicProjection {
+            scale: CELL_SIZE,
+            ..OrthographicProjection::default_2d()
+        }) - 1.0).abs() < f32::EPSILON);
     }
 }

@@ -420,6 +420,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
+name = "base64"
+version = "0.22.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "72b3254f16251a8381aa12e40e3c4d2f0199f8c6508fbecb9d91f575e0fbb8c6"
+
+[[package]]
 name = "bevy"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4013,6 +4019,7 @@ checksum = "a0d463f2884048e7153449a55166f91028d5b0ea53c79377099ce4e8cf0cf9bb"
 name = "red_black_knights"
 version = "0.1.0"
 dependencies = [
+ "base64",
  "bevy",
  "bevy_egui",
  "dirs",
@@ -4025,6 +4032,7 @@ dependencies = [
  "rand",
  "rfd",
  "serde",
+ "serde_json",
  "toml",
  "wasm-bindgen",
  "web-sys",

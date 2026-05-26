@@ -101,6 +101,7 @@ fn main() {
             app_session::persist_app_session.after(EguiPostUpdateSet::EndPass),
             draw_spiral_cells,
             camera::clamp_camera_zoom_to_texture_limit,
+            camera::apply_one_pixel_per_cell_zoom,
         )
             .chain(),
     )

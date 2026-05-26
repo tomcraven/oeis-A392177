@@ -13,10 +13,13 @@ pub mod model;
 pub mod mutate;
 pub mod random_gen;
 pub mod render;
+pub mod share_code;
 pub mod sim;
 pub mod sim_worker;
 pub mod spiral;
 pub mod ui;
 pub mod viewport;
+#[cfg(target_family = "wasm")]
+pub mod wasm_clipboard;
 
 pub const CELL_SIZE: f32 = 16.0;

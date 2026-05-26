@@ -102,6 +102,7 @@ pub fn sample_random_gen_config(rng: &mut impl Rng) -> RandomGenConfig {
         attack_symmetry: *AttackSymmetry::ALL
             .choose(rng)
             .unwrap_or(&AttackSymmetry::None),
+        identical_pieces: false,
     }
 }
 
@@ -594,6 +595,7 @@ mod tests {
                 attack_radius_max: 2,
                 pattern_density: 0.5,
                 attack_symmetry: AttackSymmetry::None,
+                identical_pieces: false,
             },
             rng_seed: 7,
             turns: 80,

@@ -598,6 +598,7 @@ mod tests {
                     attack_radius_max: 3,
                     pattern_density: 0.55,
                     attack_symmetry: AttackSymmetry::Both,
+                    identical_pieces: false,
                 },
             ),
             (
@@ -609,6 +610,7 @@ mod tests {
                     attack_radius_max: 4,
                     pattern_density: 0.15,
                     attack_symmetry: AttackSymmetry::None,
+                    identical_pieces: false,
                 },
             ),
             (
@@ -620,6 +622,7 @@ mod tests {
                     attack_radius_max: 5,
                     pattern_density: 0.45,
                     attack_symmetry: AttackSymmetry::Vertical,
+                    identical_pieces: false,
                 },
             ),
         ];

@@ -43,17 +43,21 @@ pub struct RandomGenConfig {
     /// Per eligible cell probability of being an attacked square (0..1).
     pub pattern_density: f32,
     pub attack_symmetry: AttackSymmetry,
+    /// When true, every generated piece uses the same attack pattern.
+    #[serde(default)]
+    pub identical_pieces: bool,
 }
 
 impl Default for RandomGenConfig {
     fn default() -> Self {
         Self {
             army_count_min: 2,
-            army_count_max: 6,
-            attack_radius_min: 1,
-            attack_radius_max: 4,
-            pattern_density: 0.35,
-            attack_symmetry: AttackSymmetry::None,
+            army_count_max: 3,
+            attack_radius_min: 2,
+            attack_radius_max: 3,
+            pattern_density: 0.17,
+            attack_symmetry: AttackSymmetry::Both,
+            identical_pieces: false,
         }
     }
 }
@@ -86,17 +90,32 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
 
     let colors = random_army_palette(rng, n);
 
+    let shared_moves = if cfg.identical_pieces {
+        Some(random_attack_pattern(
+            rng,
+            cfg.attack_radius_min,
+            cfg.attack_radius_max,
+            cfg.pattern_density,
+            cfg.attack_symmetry,
+        ))
+    } else {
+        None
+    };
+
     let armies: Vec<Army> = (0..n)
         .map(|i| {
-            let piece = PieceDef {
-                valid_moves: random_attack_pattern(
+            let valid_moves = if let Some(moves) = &shared_moves {
+                moves.clone()
+            } else {
+                random_attack_pattern(
                     rng,
                     cfg.attack_radius_min,
                     cfg.attack_radius_max,
                     cfg.pattern_density,
                     cfg.attack_symmetry,
-                ),
+                )
             };
+            let piece = PieceDef { valid_moves };
             let blocked_by = all_other_armies(i, n);
             Army {
                 name: format!("Piece {i}"),
@@ -313,6 +332,7 @@ mod tests {
             attack_radius_max: 1,
             pattern_density: 2.0,
             attack_symmetry: AttackSymmetry::Both,
+            identical_pieces: false,
         };
         cfg.sanitize();
         assert_eq!(cfg.army_count_min, 2);
@@ -373,6 +393,7 @@ mod tests {
             attack_radius_max: 4,
             pattern_density: 0.2,
             attack_symmetry: AttackSymmetry::Both,
+            identical_pieces: false,
         };
         let eligible = eligible_count(cfg.attack_radius_min, cfg.attack_radius_max);
         let mut rng = StdRng::seed_from_u64(2026);
@@ -399,6 +420,26 @@ mod tests {
     }
 
     #[test]
+    fn identical_pieces_share_attack_pattern() {
+        let cfg = RandomGenConfig {
+            army_count_min: 4,
+            army_count_max: 4,
+            attack_radius_min: 2,
+            attack_radius_max: 3,
+            pattern_density: 0.25,
+            attack_symmetry: AttackSymmetry::Both,
+            identical_pieces: true,
+        };
+        let mut rng = StdRng::seed_from_u64(123);
+        let def = generate_random_game(&cfg, &mut rng);
+        assert_eq!(def.armies.len(), 4);
+        let first = &def.armies[0].piece.valid_moves;
+        for army in &def.armies[1..] {
+            assert_eq!(&army.piece.valid_moves, first);
+        }
+    }
+
+    #[test]
     fn generate_respects_count_and_move_radius() {
         let cfg = RandomGenConfig {
             army_count_min: 3,
@@ -407,6 +448,7 @@ mod tests {
             attack_radius_max: 2,
             pattern_density: 1.0,
             attack_symmetry: AttackSymmetry::None,
+            identical_pieces: false,
         };
         let mut rng = StdRng::seed_from_u64(42);
         let def = generate_random_game(&cfg, &mut rng);

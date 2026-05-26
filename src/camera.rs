@@ -116,6 +116,7 @@ pub fn camera_controls(
 /// Runs after egui updates [`EguiWantsInput`] so scroll over UI does not zoom the board.
 pub fn camera_zoom_controls(
     egui_wants: Res<EguiWantsInput>,
+    viewport: Res<crate::viewport::ViewportState>,
     mut mouse_wheel: MessageReader<MouseWheel>,
     mut query: Query<&mut Projection, With<BoardCamera>>,
     pan_q: Query<&PanCamera, With<BoardCamera>>,
@@ -126,6 +127,11 @@ pub fn camera_zoom_controls(
     let Ok(pan) = pan_q.single() else {
         return;
     };
+
+    if viewport.zoom_mode == crate::viewport::BoardZoomMode::OnePixelPerCell {
+        mouse_wheel.clear();
+        return;
+    }
 
     for wheel in mouse_wheel.read() {
         if egui_wants.wants_any_pointer_input() {
@@ -169,6 +175,7 @@ pub fn camera_pointer_controls(
     let board_w = (window.width() - left).max(1.0);
     let board_h = window.height().max(1.0);
     let block_new_pointer = egui_wants.wants_any_pointer_input();
+    let pixel_zoom = viewport.zoom_mode == crate::viewport::BoardZoomMode::OnePixelPerCell;
 
     for press in mouse_button_events.read() {
         if press.button != MouseButton::Left {
@@ -205,15 +212,19 @@ pub fn camera_pointer_controls(
     let touch_count = touches.iter().count();
     if touch_count >= 2 {
         pointer.pan_touch_id = None;
-        let mut touch_iter = touches.iter();
-        let a = touch_iter.next().expect("touch_count >= 2");
-        let b = touch_iter.next().expect("touch_count >= 2");
-        let span = a.position().distance(b.position());
-        if let Some(prev) = pointer.last_pinch_span {
-            let factor = (prev / span).clamp(0.2, 5.0);
-            apply_zoom_factor(ortho, factor, pan);
+        if !pixel_zoom {
+            let mut touch_iter = touches.iter();
+            let a = touch_iter.next().expect("touch_count >= 2");
+            let b = touch_iter.next().expect("touch_count >= 2");
+            let span = a.position().distance(b.position());
+            if let Some(prev) = pointer.last_pinch_span {
+                let factor = (prev / span).clamp(0.2, 5.0);
+                apply_zoom_factor(ortho, factor, pan);
+            }
+            pointer.last_pinch_span = Some(span);
+        } else {
+            pointer.last_pinch_span = None;
         }
-        pointer.last_pinch_span = Some(span);
     } else {
         pointer.last_pinch_span = None;
 
@@ -239,7 +250,7 @@ pub fn camera_pointer_controls(
     }
 
     for pinch in pinch_events.read() {
-        if block_new_pointer {
+        if block_new_pointer || pixel_zoom {
             continue;
         }
         let factor = 1.0 - pinch.0 * pan.zoom_speed;
@@ -270,6 +281,22 @@ pub fn clamp_camera_zoom_to_texture_limit(
     };
     let effective_max = pan.max_scale.min(safe_max).min(budget_cap);
     ortho.scale = ortho.scale.clamp(pan.min_scale, effective_max);
+}
+
+pub fn apply_one_pixel_per_cell_zoom(
+    viewport: Res<crate::viewport::ViewportState>,
+    mut query: Query<&mut Projection, With<BoardCamera>>,
+) {
+    if viewport.zoom_mode != crate::viewport::BoardZoomMode::OnePixelPerCell {
+        return;
+    }
+    let Ok(mut projection) = query.single_mut() else {
+        return;
+    };
+    let Projection::Orthographic(ref mut ortho) = *projection else {
+        return;
+    };
+    ortho.scale = crate::viewport::ortho_scale_for_one_pixel_per_cell();
 }
 
 pub fn apply_camera_actions(

@@ -4,10 +4,10 @@ use serde::{Deserialize, Serialize};
 
 use crate::board_export;
 use crate::bookmark_config::{Bookmark, BookmarkStore};
+use crate::share_code::{self, ShareCapture};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
-use crate::CELL_SIZE;
 use crate::model::{GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
@@ -17,7 +17,7 @@ use crate::mutate::{
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
-use crate::viewport::{self, ViewportState};
+use crate::viewport::{self, BoardZoomMode, ViewportState};
 
 /// How occupied spiral cells are coloured on the board texture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -41,6 +41,8 @@ impl<'de> Deserialize<'de> for BoardColourMode {
 pub struct SidebarSections {
     #[serde(default)]
     pub view: bool,
+    #[serde(default)]
+    pub share: bool,
     #[serde(default)]
     pub colouring: bool,
     #[serde(default)]
@@ -85,6 +87,10 @@ pub struct UiState {
     pub sidebar: SidebarSections,
     /// Short-lived status after exporting the board (sidebar View section).
     pub export_status: Option<String>,
+    /// Paste buffer for import share code (View section).
+    pub share_code_input: String,
+    /// egui time (`Context::input`) when copy succeeded; drives brief “Copied!” button label.
+    pub share_code_copied_at: Option<f64>,
 }
 
 impl Default for UiState {
@@ -103,6 +109,8 @@ impl Default for UiState {
             add_piece_color: GameDefinition::default_army_color(0),
             sidebar: SidebarSections::default(),
             export_status: None,
+            share_code_input: String::new(),
+            share_code_copied_at: None,
         }
     }
 }
@@ -273,6 +281,31 @@ pub fn ui_game_definition(
                         if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
                         {
                             if let Projection::Orthographic(ref mut ortho) = *projection {
+                                let mut pixel_per_cell =
+                                    viewport.zoom_mode == BoardZoomMode::OnePixelPerCell;
+                                if ui
+                                    .checkbox(&mut pixel_per_cell, "1 pixel per cell")
+                                    .changed()
+                                {
+                                    viewport.zoom_mode = if pixel_per_cell {
+                                        BoardZoomMode::OnePixelPerCell
+                                    } else {
+                                        BoardZoomMode::Free
+                                    };
+                                    if pixel_per_cell {
+                                        camera_actions.center_view = true;
+                                    }
+                                }
+                                if pixel_per_cell {
+                                    ui.label(
+                                        egui::RichText::new(
+                                            "Scroll zoom off; one cell = one pixel on the tighter axis.",
+                                        )
+                                        .small()
+                                        .weak(),
+                                    );
+                                }
+
                                 sidebar_field_label(ui, "Position");
                                 ui.columns(2, |cols| {
                                     let row_h = cols[0].spacing().interact_size.y;
@@ -303,21 +336,115 @@ pub fn ui_game_definition(
                                         calibration_config::MAX_ZOOM_OUT_BUDGET
                                             .min(pan.max_scale)
                                     };
-                                ortho.scale = ortho
-                                    .scale
-                                    .clamp(pan.min_scale, effective_zoom_max);
+                                if !pixel_per_cell {
+                                    ortho.scale = ortho
+                                        .scale
+                                        .clamp(pan.min_scale, effective_zoom_max);
 
-                                sidebar_field_label(ui, "Zoom");
-                                ui.add(
-                                    egui::DragValue::new(&mut ortho.scale)
-                                        .range(pan.min_scale..=effective_zoom_max)
-                                        .speed(0.02)
-                                        .fixed_decimals(3),
-                                );
+                                    sidebar_field_label(ui, "Zoom");
+                                    ui.add(
+                                        egui::DragValue::new(&mut ortho.scale)
+                                            .range(pan.min_scale..=effective_zoom_max)
+                                            .speed(0.02)
+                                            .fixed_decimals(3),
+                                    );
+                                } else {
+                                    sidebar_field_label(ui, "Zoom");
+                                    ui.label(format!("{:.3} (locked)", ortho.scale));
+                                }
                                 ui.add_space(SIDEBAR_FIELD_GAP);
                             }
                         }
                     });
+                    ui_state.sidebar.share = sidebar_collapsing(
+                        ui,
+                        "share",
+                        "Share",
+                        ui_state.sidebar.share,
+                        false,
+                        |ui| {
+                            const SHARE_COPIED_FLASH_SECS: f64 = 1.0;
+                            let now = ctx.input(|i| i.time);
+                            if ui_state
+                                .share_code_copied_at
+                                .is_some_and(|t| now - t >= SHARE_COPIED_FLASH_SECS)
+                            {
+                                ui_state.share_code_copied_at = None;
+                            }
+                            let copy_share_label = if ui_state.share_code_copied_at.is_some() {
+                                "Copied!"
+                            } else {
+                                "Copy share code"
+                            };
+                            if ui.button(copy_share_label).clicked() {
+                                match read_camera_session(&camera_q, &window_q, &viewport) {
+                                    Some(camera) => {
+                                        let snap = share_code::capture_share_view(ShareCapture {
+                                            def: &draft,
+                                            camera,
+                                            target_index: viewport.target_index,
+                                            board_colour_mode: ui_state.board_colour_mode,
+                                        });
+                                        match share_code::encode_share_code(&snap) {
+                                            Ok(code) => {
+                                                #[cfg(target_family = "wasm")]
+                                                {
+                                                    use crate::wasm_clipboard::{
+                                                        ShareCodeCopyOutcome,
+                                                        publish_share_code_for_copy,
+                                                    };
+                                                    match publish_share_code_for_copy(&code) {
+                                                        Ok(
+                                                            ShareCodeCopyOutcome::SystemClipboard,
+                                                        ) => {
+                                                            ui_state.share_code_copied_at =
+                                                                Some(ctx.input(|i| i.time));
+                                                        }
+                                                        Ok(
+                                                            ShareCodeCopyOutcome::ManualCopyDialog,
+                                                        ) => {}
+                                                        Err(_) => {}
+                                                    }
+                                                }
+                                                #[cfg(not(target_family = "wasm"))]
+                                                {
+                                                    ctx.copy_text(code);
+                                                    ui_state.share_code_copied_at =
+                                                        Some(ctx.input(|i| i.time));
+                                                }
+                                            }
+                                            Err(_) => {}
+                                        }
+                                    }
+                                    None => {}
+                                }
+                            }
+                            ui.add(
+                                egui::TextEdit::singleline(&mut ui_state.share_code_input)
+                                    .hint_text("Paste share code here…"),
+                            );
+                            if ui.button("Import share code").clicked() {
+                                match share_code::decode_share_code(
+                                    ui_state.share_code_input.trim(),
+                                ) {
+                                    Ok(snapshot) => {
+                                        share_code::apply_share_snapshot(
+                                            &snapshot,
+                                            def.as_mut(),
+                                            sim.as_mut(),
+                                            &mut ui_state,
+                                            &mut viewport,
+                                            &mut cache,
+                                            &mut camera_q,
+                                            preset_index_for_def,
+                                        );
+                                        draft = def.as_ref().clone();
+                                    }
+                                    Err(_) => {}
+                                }
+                            }
+                        },
+                    );
                     ui_state.sidebar.colouring = sidebar_collapsing(
                         ui,
                         "colouring",
@@ -470,6 +597,10 @@ pub fn ui_game_definition(
                                         }
                                     }
                                 });
+                            ui.checkbox(
+                                &mut rg.identical_pieces,
+                                "Identical attack patterns",
+                            );
                             ui.add_space(SIDEBAR_FIELD_GAP);
 
                             ui.add_space(4.0);
@@ -882,9 +1013,7 @@ pub fn ui_game_definition(
                     {
                         let board_width_px =
                             (window.width() - viewport.left_inset_px).ceil().max(1.0);
-                        let world_per_screen_px =
-                            ortho.area.width() / board_width_px.max(1.0);
-                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
+                        let cells_per_screen_px = viewport::cells_per_screen_pixel(ortho);
                         let board_pixels =
                             board_width_px as u64 * window.height().ceil().max(1.0) as u64;
                         ui.label(format!("Zoom scale: {:.3}", ortho.scale));
