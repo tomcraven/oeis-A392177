@@ -9,6 +9,7 @@ use bevy_egui::{
     input::write_egui_wants_input_system,
 };
 
+use red_black_knights::app_session::{self, AppSessionCache};
 use red_black_knights::camera::{self, camera_controls};
 use red_black_knights::model::GameDefinition;
 use red_black_knights::render::{
@@ -46,16 +47,16 @@ fn main() {
         .init_resource::<red_black_knights::bookmark_config::BookmarkStore>()
         .init_resource::<RenderCache>()
         .init_resource::<ViewportState>()
+        .init_resource::<AppSessionCache>()
         .init_resource::<camera::BoardPointerState>()
         .init_resource::<camera::PendingCameraAction>()
-        .init_resource::<camera::LastSavedCamera>()
         .add_systems(
             Startup,
             (
                 disable_egui_auto_primary_context,
                 setup_camera,
                 load_bookmarks,
-                camera::apply_saved_camera_session,
+                app_session::apply_saved_app_session,
                 setup_sim_worker,
                 setup_render_assets,
                 setup_smoke_test,
@@ -82,8 +83,8 @@ fn main() {
                 camera_controls.after(write_egui_wants_input_system),
                 camera::camera_zoom_controls.after(write_egui_wants_input_system),
                 camera::camera_pointer_controls.after(write_egui_wants_input_system),
-                camera::persist_camera_session,
                 sync_simulation_to_viewport,
+                app_session::persist_app_session,
                 draw_spiral_cells,
                 camera::clamp_camera_zoom_to_texture_limit,
             )

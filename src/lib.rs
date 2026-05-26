@@ -1,3 +1,4 @@
+pub mod app_session;
 pub mod bookmark_config;
 pub mod calibration_config;
 pub mod camera;

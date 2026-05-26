@@ -32,7 +32,7 @@ impl AttackSymmetry {
 }
 
 /// Settings for the “Generate random pieces” action in the UI.
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RandomGenConfig {
     pub army_count_min: u32,
     pub army_count_max: u32,

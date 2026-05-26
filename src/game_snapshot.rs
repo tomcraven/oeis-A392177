@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
 
-#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedColor {
     pub r: f32,
     pub g: f32,

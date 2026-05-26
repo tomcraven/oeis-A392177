@@ -4,11 +4,7 @@ use bevy::prelude::*;
 use bevy_egui::input::EguiWantsInput;
 
 use crate::calibration_config;
-use crate::camera_config::{CameraSessionConfig, load, save};
 use crate::viewport::grid_to_world;
-
-#[derive(Resource, Default)]
-pub struct LastSavedCamera(pub Option<CameraSessionConfig>);
 
 #[derive(Resource, Default)]
 pub struct PendingCameraAction {
@@ -290,50 +286,4 @@ pub fn apply_camera_actions(
     let origin = grid_to_world(0, 0);
     transform.translation.x = origin.x;
     transform.translation.y = origin.y;
-}
-
-pub fn apply_saved_camera_session(
-    mut query: Query<(&mut Transform, &mut Projection), With<BoardCamera>>,
-) {
-    let Some(saved) = load() else {
-        return;
-    };
-    let Ok((mut transform, mut projection)) = query.single_mut() else {
-        return;
-    };
-    transform.translation.x = saved.x;
-    transform.translation.y = saved.y;
-    if let Projection::Orthographic(ref mut ortho) = *projection {
-        let cap = if calibration_config::smoke_test_mode() {
-            f32::MAX
-        } else {
-            calibration_config::MAX_ZOOM_OUT_BUDGET
-        };
-        ortho.scale = saved
-            .zoom
-            .clamp(calibration_config::MIN_ZOOM_OUT, cap);
-    }
-}
-
-pub fn persist_camera_session(
-    query: Query<(&Transform, &Projection), With<BoardCamera>>,
-    mut last: ResMut<LastSavedCamera>,
-) {
-    let Ok((transform, projection)) = query.single() else {
-        return;
-    };
-    let Projection::Orthographic(ortho) = projection else {
-        return;
-    };
-    let current = CameraSessionConfig {
-        x: transform.translation.x,
-        y: transform.translation.y,
-        zoom: ortho.scale,
-    };
-    if last.0 == Some(current) {
-        return;
-    }
-    if save(&current).is_ok() {
-        last.0 = Some(current);
-    }
 }
