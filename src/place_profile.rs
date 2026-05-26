@@ -14,6 +14,10 @@ pub struct PlaceWorkStats {
     pub forbidden_word_grows: u64,
     /// How often `combined_forbidden_word` runs during scan (feature `place_profile`).
     pub scan_forb_word_combines: u64,
+    /// Full forbidden-word tail jumps (`next..word_end` all forbidden).
+    pub scan_forbidden_tail_skips: u64,
+    /// Single-index advances (`spiral_step` path) after a rejection.
+    pub scan_single_step_rejects: u64,
 }
 
 /// Per-`ForbiddenSet::insert` call during a profiled run.
@@ -94,6 +98,20 @@ pub fn note_scan_forb_word_combine() {
         return;
     }
     WORK.with(|w| w.borrow_mut().scan_forb_word_combines += 1);
+}
+
+pub fn note_scan_forbidden_tail_skip() {
+    if !profiling_enabled() {
+        return;
+    }
+    WORK.with(|w| w.borrow_mut().scan_forbidden_tail_skips += 1);
+}
+
+pub fn note_scan_single_step_reject() {
+    if !profiling_enabled() {
+        return;
+    }
+    WORK.with(|w| w.borrow_mut().scan_single_step_rejects += 1);
 }
 
 pub fn note_placement_work(valid_moves: u64, targets: u64) {

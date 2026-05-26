@@ -260,11 +260,17 @@ fn print_fanout_report(
         "  layer inserts/placement: {} moves (attack_layers; no cross-target fanout)",
         work.forbidden_bit_inserts as f64 / work.placements.max(1) as f64
     );
+    let places = work.placements.max(1) as f64;
     eprintln!(
         "  scan: cells/placement {:.2}; combined_forbidden_word calls/placement {:.2} ({:.3} per cell examined)",
-        work.scan_cells_examined as f64 / work.placements.max(1) as f64,
-        work.scan_forb_word_combines as f64 / work.placements.max(1) as f64,
+        work.scan_cells_examined as f64 / places,
+        work.scan_forb_word_combines as f64 / places,
         work.scan_forb_word_combines as f64 / work.scan_cells_examined.max(1) as f64
+    );
+    eprintln!(
+        "  scan rejects: tail_skip/placement {:.3}; single_step/placement {:.3} (remainder ≈ cells − 1 − tail − single)",
+        work.scan_forbidden_tail_skips as f64 / places,
+        work.scan_single_step_rejects as f64 / places
     );
     eprintln!(
         "  graph: {} armies; defenders respecting army0: {}",

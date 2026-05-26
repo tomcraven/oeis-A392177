@@ -189,6 +189,8 @@ impl Simulation {
                 let len = word_end - next;
                 let tail_mask = (1u64 << len) - 1;
                 if ((forb_word >> shift) & tail_mask) == tail_mask {
+                    #[cfg(feature = "place_profile")]
+                    crate::place_profile::note_scan_forbidden_tail_skip();
                     cursor = word_end;
                     xy = index_to_xy(word_end);
                     if cursor == u32::MAX {
@@ -204,6 +206,8 @@ impl Simulation {
 
             cursor = next;
             xy = spiral_step(xy);
+            #[cfg(feature = "place_profile")]
+            crate::place_profile::note_scan_single_step_reject();
 
             if cursor == u32::MAX {
                 self.cursors[army_id] = cursor;
@@ -868,5 +872,186 @@ mod tests {
                 assert_eq!(index_to_xy(cursor), xy, "{} cursor {cursor}", case.name);
             }
         }
+    }
+
+    /// Survey whether cheaper than `xy_to_index` per attack is plausible (run with `--nocapture`).
+    #[test]
+    fn attack_indexing_survey() {
+        use crate::spiral::{index_to_ring_offset, xy_to_ring_offset};
+        use std::collections::HashMap;
+
+        struct Survey {
+            placements: u64,
+            max_abs_xy: i32,
+            same_ring_attacks: u64,
+            ring_delta_le1: u64,
+            /// Distinct `(placement_index, move_slot)` → spiral index delta.
+            index_delta_keys: HashMap<(u32, u8), i32>,
+            /// Distinct `(placement_ring, move_slot)` → spiral index delta.
+            ring_delta_keys: HashMap<(u32, u8), i32>,
+            /// Distinct `(placement_ring, perimeter_offset, move_slot)` → delta.
+            ring_offset_delta_keys: HashMap<(u32, u32, u8), i32>,
+            index_delta_conflicts: u64,
+            ring_delta_conflicts: u64,
+            ring_offset_delta_conflicts: u64,
+            total_attacks: u64,
+        }
+
+        fn survey_preset(name: &str, def: &GameDefinition, turns: usize) -> Survey {
+            let mut sim = Simulation::new(def);
+            let mut s = Survey {
+                placements: 0,
+                max_abs_xy: 0,
+                same_ring_attacks: 0,
+                ring_delta_le1: 0,
+                index_delta_keys: HashMap::new(),
+                ring_delta_keys: HashMap::new(),
+                ring_offset_delta_keys: HashMap::new(),
+                index_delta_conflicts: 0,
+                ring_delta_conflicts: 0,
+                ring_offset_delta_conflicts: 0,
+                total_attacks: 0,
+            };
+
+            for _ in 0..turns {
+                assert!(sim.step_turn(def));
+                let (place_index, army_id) = *sim.placements.last().unwrap();
+                let (x, y) = index_to_xy(place_index);
+                s.max_abs_xy = s.max_abs_xy.max(x.abs()).max(y.abs());
+                let place_ro = index_to_ring_offset(place_index);
+                let moves = &def.army(army_id).piece.valid_moves;
+                s.placements += 1;
+
+                for (slot, &(dx, dy)) in moves.iter().enumerate() {
+                    s.total_attacks += 1;
+                    let attacked = xy_to_index(x + dx, y + dy);
+                    let delta = attacked as i64 - place_index as i64;
+                    let attack_ro = xy_to_ring_offset(x + dx, y + dy);
+                    if attack_ro.ring == place_ro.ring {
+                        s.same_ring_attacks += 1;
+                    }
+                    if attack_ro.ring.abs_diff(place_ro.ring) <= 1 {
+                        s.ring_delta_le1 += 1;
+                    }
+                    let d = delta as i32;
+                    match s.index_delta_keys.get(&(place_index, slot as u8)) {
+                        Some(prev) if *prev != d => s.index_delta_conflicts += 1,
+                        None => {
+                            s.index_delta_keys.insert((place_index, slot as u8), d);
+                        }
+                        _ => {}
+                    }
+                    match s.ring_delta_keys.get(&(place_ro.ring, slot as u8)) {
+                        Some(prev) if *prev != d => s.ring_delta_conflicts += 1,
+                        None => {
+                            s.ring_delta_keys.insert((place_ro.ring, slot as u8), d);
+                        }
+                        _ => {}
+                    }
+                    match s
+                        .ring_offset_delta_keys
+                        .get(&(place_ro.ring, place_ro.offset, slot as u8))
+                    {
+                        Some(prev) if *prev != d => s.ring_offset_delta_conflicts += 1,
+                        None => {
+                            s.ring_offset_delta_keys
+                                .insert((place_ro.ring, place_ro.offset, slot as u8), d);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            eprintln!("\n=== attack indexing survey: {name} ({turns} placements) ===");
+            eprintln!(
+                "  max |x|,|y| at placement: {}; total attacks: {}",
+                s.max_abs_xy, s.total_attacks
+            );
+            let attacks = s.total_attacks;
+            eprintln!(
+                "  attack ring == placement ring: {:.1}%",
+                100.0 * s.same_ring_attacks as f64 / attacks as f64
+            );
+            eprintln!(
+                "  |Δring| <= 1: {:.1}%",
+                100.0 * s.ring_delta_le1 as f64 / attacks as f64
+            );
+            eprintln!(
+                "  unique (placement_index, move) → index Δ: {}",
+                s.index_delta_keys.len()
+            );
+            eprintln!(
+                "  unique (placement_ring, move) → index Δ: {}",
+                s.ring_delta_keys.len()
+            );
+            eprintln!(
+                "  unique (ring, perimeter_offset, move) → index Δ: {} (conflicts {})",
+                s.ring_offset_delta_keys.len(),
+                s.ring_offset_delta_conflicts
+            );
+            eprintln!(
+                "  index-key conflicts: {}; ring-key conflicts: {}",
+                s.index_delta_conflicts, s.ring_delta_conflicts
+            );
+            s
+        }
+
+        let king = GameDefinition::king_6_clique();
+        let chimera = GameDefinition::chimera_3_clique();
+        survey_preset("knight_2_pairwise", &GameDefinition::knight_2_pairwise(), 100_000);
+        survey_preset("king_6_clique", &king, 100_000);
+        survey_preset("chimera_3_clique", &chimera, 100_000);
+
+        // Replay 100k knight placements: precomputed index→attacks table vs live xy_to_index.
+        use crate::model::PieceDef;
+        use std::hint::black_box;
+        use std::time::Instant;
+
+        let moves: &[(i32, i32)] = &PieceDef::knight().valid_moves;
+        let def = GameDefinition::knight_2_pairwise();
+        let mut sim = Simulation::new(&def);
+        let mut placements_xy: Vec<(u32, (i32, i32))> = Vec::with_capacity(100_000);
+        for _ in 0..100_000 {
+            assert!(sim.step_turn(&def));
+            let (index, _) = *sim.placements.last().unwrap();
+            placements_xy.push((index, index_to_xy(index)));
+        }
+        let max_index = placements_xy.iter().map(|(i, _)| *i).max().unwrap();
+        eprintln!("\n=== attack table vs xy_to_index (knight, 100k placements, max_index={max_index}) ===");
+
+        let mut table = vec![[0u32; 8]; max_index as usize + 1];
+        let t0 = Instant::now();
+        for index in 0..=max_index {
+            let (x, y) = index_to_xy(index);
+            for (i, &(dx, dy)) in moves.iter().enumerate() {
+                table[index as usize][i] = xy_to_index(x + dx, y + dy);
+            }
+        }
+        let build_ms = t0.elapsed().as_secs_f64() * 1e3;
+        eprintln!("  build table [0..={max_index}]: {build_ms:.1} ms");
+
+        let t1 = Instant::now();
+        let mut acc = 0u64;
+        for &(index, _) in &placements_xy {
+            for &a in &table[index as usize] {
+                acc = acc.wrapping_add(a as u64);
+            }
+        }
+        black_box(acc);
+        let lut_ms = t1.elapsed().as_secs_f64() * 1e3;
+
+        let t2 = Instant::now();
+        let mut acc2 = 0u64;
+        for &(_, (x, y)) in &placements_xy {
+            for &(dx, dy) in moves {
+                acc2 = acc2.wrapping_add(xy_to_index(x + dx, y + dy) as u64);
+            }
+        }
+        black_box(acc2);
+        let live_ms = t2.elapsed().as_secs_f64() * 1e3;
+
+        eprintln!(
+            "  replay 800k attacks — LUT: {lut_ms:.1} ms, live xy_to_index: {live_ms:.1} ms (build amortized +{:.1} ms/placement if spread over 100k)",
+            build_ms / 100_000.0
+        );
     }
 }

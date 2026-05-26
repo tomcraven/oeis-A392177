@@ -310,3 +310,69 @@ Method: `cargo run --release --features place_profile,bevy/dynamic_linking --bin
 **Place replay (isolated components, median):** `xy_to_index` dominates knight/leaper/king presets (~59–63% of place replay); layer `ForbiddenSet::insert` ~18–20% (single-set replay); chimera ~72% xy / ~32% forb (16 moves). Occupancy ~2–4%.
 
 **Takeaways:** Forbidden write fanout is gone; **scan is ~⅓ of step** on multi-army benches (up from ~8–15% pre-layers). `forb_combines_per_cell` ≈ **1 ÷ cells_per_place** (~0.36–0.44): one `combined_forbidden_word` at scan start each turn, plus occasional word-boundary/tail-skip reloads — not one OR per examined cell. Scan time is mostly **occupancy check + spiral_step + index_to_xy**, not layer OR. Further sim CPU without algorithm change targets the scan loop, not place fanout. **`chimera_3_clique`** remains slowest via **2× move count** on place, not scan.
+
+## What did not work (2026-05-26 perf pass, round 8 — profile-guided)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 3.084, `knight_3_clique` 2.720, `leaper_4_mixed_clique` 2.761, `king_6_clique` 2.866, `chimera_3_clique` 4.054 ms. Checksums unchanged; `cargo testd -p red_black_knights --lib` passed.
+
+- **Within-word forbidden-run skip** (`trailing_ones` on `forb_word >> pos`, jump with `index_to_xy` when `run > 1`, threshold `run > 4` also tried) — mixed / within jitter vs baseline (`knight_2_pairwise` occasionally ~3–8% faster, `chimera_3_clique` often slightly slower); extra `index_to_xy` on short runs; reverted.
+- **`record_forbidden` match on `moves.len()` 8 / 16** (indexed loop + hoisted `attack_layers` mut ref) — medians up on several cases (e.g. `chimera_3_clique` ~4.21 ms); reverted.
+
+**Kept (round 8):** `place_profile` scan reject counters — `scan_forbidden_tail_skips`, `scan_single_step_rejects` (feature `place_profile` only); `profile_place` prints tail vs single-step reject rates.
+
+**Scan reject breakdown** (post–attack-layers, `profile_place` collect pass, 100k turns):
+
+| Case | cells/place | tail_skip/place | single_step/place |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.67 | 0.018 | 1.65 |
+| `king_6_clique` | 2.97 | 0.084 | 1.89 |
+| `chimera_3_clique` | 2.36 | 0.035 | 1.33 |
+
+Most rejections advance one index via `spiral_step`; full-word forbidden tail jumps are rare. Partial forbidden runs are uncommon enough that `trailing_ones` jumps did not pay for their `index_to_xy` cost.
+
+**Next targets (unchanged):** `xy_to_index` in `record_forbidden` (~60–72% of place replay); scan loop single-step + occupancy (no low-risk micro-optim left after rounds 1–7 and round 8 above).
+
+## Attack indexing investigation (2026-05-26)
+
+**Question:** Can we mark attacked cells without one full [`xy_to_index`](src/spiral.rs) per move per placement?
+
+**Harness:** `cargo test -p red_black_knights --release --features bevy/dynamic_linking --lib attack_indexing_survey -- --nocapture` (survey + fair LUT microbench). [`RingOffset`](src/spiral.rs) helpers round-trip with `index` / `xy` (same geometry as `xy_to_index`, not faster by themselves).
+
+### Geometry facts (100k placements)
+
+| Preset | max \|x\|,\|y\| | same-ring attacks | \|Δring\| ≤ 1 | unique (ring, move)→Δ with conflicts |
+| --- | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | 165 | 0.3% | 50% | 1328 keys, **663k** conflicts |
+| `king_6_clique` | 164 | 25% | **100%** | 1320 keys, **550k** conflicts |
+| `chimera_3_clique` | 164 | 13% | 50% | 2640 keys, **1.2M** conflicts |
+
+- **Index delta is never global:** 800k attacks ⇒ 800k distinct `(placement_index, move_slot) → index Δ` pairs.
+- **Perimeter position matters:** `(ring, offset, move)` is injective (800k unique, 0 conflicts) — each occupied spiral cell has its own attack index set.
+- **Ring-only tables are wrong:** the same ring + move slot yields different index Δ depending on where you are on that ring (hundreds of thousands of conflicts).
+
+### Strategies evaluated
+
+| Approach | Verdict |
+| --- | --- |
+| **Lazy cache keyed by placement index** | **No win** — each spiral index is occupied at most once, so no reuse within a run. |
+| **Runtime memo `(ring, move)`** | **Invalid** — see conflicts above. |
+| **Ring/offset parametric OR** | Same branches as `xy_to_index`; no cheaper closed form for arbitrary leaper offsets. |
+| **Coordinate LUT** (`R=448`, prior round) | **Regressed** — likely cache footprint / access pattern, not lack of coverage (max coord ≈ 165 at 100k). |
+| **Precomputed `attacks[index][move]` table** | **Lookup ~15× faster** than live `xy_to_index` on replay (0.1 ms vs 1.5 ms for 800k knight attacks), but **building** all indices `0..=max_index` costs ~1.8 ms once; **building only placed indices** costs the same 800k `xy_to_index` as today. **Net:** only helps if the table is **precomputed offline** (build script / `include_bytes!`) and shipped — not from lazy runtime fill. |
+| **Idempotent layer `insert` / skip OR** | Already rejected (branch cost). |
+
+### Fair microbench (knight, 100k placements, `max_index ≈ 109390`)
+
+- Live `record_forbidden` path (8× `xy_to_index` from cached placement `xy`): **~1.5 ms** for 800k conversions in isolation.
+- Replay from prebuilt `table[index][0..8]`: **~0.1 ms** (requires table already filled for `0..=max_index`).
+
+At 100k turns, place replay is ~2.5–3 ms total — attack indexing is a large slice, but a shipped static table for one piece shape is **~3.5 MiB** (`max_index × 8 × 4` bytes) per piece variant and must be regenerated when spiral mapping or move sets change.
+
+### Practical directions (ranked)
+
+1. **Build-time attack tables per catalog `PieceDef`** (optional feature `precomputed_attacks`) — real runtime win for native/wasm if binary size acceptable; generate in `build.rs` up to `MAX_SPIRAL_INDEX` per piece.
+2. **Piece-specific micro paths** — king (and wazir/ferz subset) always \|Δring\| ≤ 1; could specialize side/offset arithmetic instead of full `xy_to_index` (engineering heavy, moderate gain).
+3. **Semantic change** — store threats in grid coords or chunks (big sim/render change); only if willing to rework scan + layers.
+4. **Do nothing** — current `xy_to_index` loop is hard to beat on a **single** playthrough without shipping precomputed data.
+
+**Not recommended:** ring-only LUT, per-index memo during play, or repeating coordinate LUT without a new access pattern (e.g. index-major static table).
