@@ -82,9 +82,58 @@ Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'`
 - **64-bit word batch scan in `step_turn`** — OR forbidden + occupancy masks in a u64 tail, use `trailing_ones` to skip blocked runs and jump with `index_to_xy`. Correct (checksums unchanged) but medians matched baseline within jitter; extra bitset maintenance on `OccupancyGrid` and tail work on most rejections did not pay off. Aligns with earlier failed combined-mask / occupancy-skip attempts in this file.
 - **True SIMD intrinsics** — hot path is already u64 lane logic; `xy_to_index` / `spiral_step` are branchy and not batch-friendly. No separate intrinsic pass tried after SWAR showed no win.
 
+## What did not work (2026-05-26 perf pass)
+
+- **Forbidden check before occupancy in `step_turn`** — skip `contains_index` when the forbidden bit is set. Checksums unchanged; `cargo testd` passed. Release `time_sim` (15 iters) regressed `knight_2_pairwise` median (~2.59 ms → ~3.20 ms) with no reliable win on other bench cases (within jitter). Reverted.
+
+## What did not work (2026-05-26 perf pass, round 2)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, medians `knight_2_pairwise` 2.600, `knight_3_clique` 3.044, `leaper_4_mixed_clique` 3.436, `guard_6_clique` 4.051, `chimera_3_clique` 4.604 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+
+- **Occupancy `contains_index` with explicit `i < len` branch** — regressed `knight_2_pairwise` (~2.93 ms median); reverted.
+- **Occupancy `insert` with `next_power_of_two` logical length** — mixed (multi-army medians down, `knight_2_pairwise` up ~2.95 ms); reverted.
+- **Forbidden `words` geometric growth (`next_power_of_two` capacity)** — large regression on all cases (e.g. `guard_6_clique` ~6.8 ms); extra zeroed words hurt cache; reverted.
+- **`#[inline(always)]` on `spiral::{index_to_xy, xy_to_index, spiral_step}`** — noisy, no consistent win; reverted.
+- **Occupancy `insert` with `reserve` doubling before exact `resize`** — no win; reverted.
+- **Hoist `occupancy.cells` slice in `step_turn`** — no win; reverted.
+- **Idempotent `ForbiddenSet::insert` (skip if bit already set)** — extra branch on every fanout; medians up; reverted.
+- **Cached `word_idx` in `step_turn` (avoid repeated `cursor >> 6`)** — mixed, `knight_2_pairwise` worse; reverted.
+- **`record_forbidden` via local `&mut [ForbiddenSet]`** — no win (similar to rejected scan-loop hoisting); reverted.
+- **Const `FORBIDDEN_TAIL_MASKS` lookup instead of `(1 << len) - 1`** — within jitter; reverted.
+- **`usize` cursor in `step_turn` scan loop** — within jitter / slight regression on chimera; reverted.
+- **Hybrid `spiral_step` chain vs `index_to_xy` on forbidden tail skip (`dist <= 8`)** — within jitter; reverted.
+
+`sample(1)` on release `time_sim` shows ~all CPU in `Simulation::step_turn`; `record_forbidden` / `index_to_xy` barely appear separately (inlined or cold vs scan).
+
+## `step_turn` scan rejections (2026-05-26)
+
+Hypothesis: late-game clique presets might reject **thousands** of spiral cells per turn, making a dynamic “next legal index” structure worthwhile.
+
+**Measurement:** `scan_rejection_late_game_presets_and_random` in `src/sim.rs` (`step_turn_inner` counts loop iterations; on success **rejections = cells_examined − 1**). Forbidden word-tail skips count as **one** iteration, matching CPU work rather than raw spiral index distance.
+
+**Run report:**
+
+```bash
+cargo test --release --features bevy/dynamic_linking scan_rejection_late_game -- --nocapture
+```
+
+**Findings (release):** Five bench presets at **100k** turns; random `RandomGenConfig` shapes × 3 seeds at **20k** turns. Stats over the **last 1000** turns (p50 / p99) plus global max over the full run.
+
+| Case | max rej. | late p99 | mean |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 108 | 23 | 1.7 |
+| `knight_3_clique` | 192 | 39 | 2.0 |
+| `guard_6_clique` | 118 | 17 | 2.0 |
+| `chimera_3_clique` | 92 | 4 | 1.4 |
+| Random (worst of 12) | **286** | ≤62 | ~1–5 |
+
+**Never ≥1000 rejections/turn** in this survey (test asserts `global_max < 1000`). Typical turns are 0–1 rejection (late p50 ≈ 1). Cost is ~100k turns × a **short** scan loop plus placement fanout, not long rejection runs—so successor/rank-select bitstructures are unlikely to beat the current scan.
+
 ## Future work
 
 - Safe far zoom-out needs a viewport-limited **render** path, not only a higher `max_scale`.
 - Exact simulation cannot skip offscreen spiral history; only the **target index** may be capped to the visible rectangle (+ margin).
 - Occupancy fast paths need a bitset **and** a skip path that is not evaluated on every rejection when it cannot fire (e.g. only when `contains_index(next)` and word-aligned occupied mask is full — still regressed when tried with maintained bitset).
-- No further low-risk CPU wins obvious without profiling (`sample`/`perf`) on `step_turn` vs `record_forbidden` split.
+- No further low-risk CPU wins obvious without deeper profiling (`sample`/`perf`) on `step_turn` codegen (scan vs `place` / inlined `record_forbidden`). Scan-rejection survey shows per-turn rejections stay **O(1)** (max ~286 in tested configs), not thousands—see **`step_turn` scan rejections** above.
+- **2026-05-26 session baseline** (`cargo rund --release --bin time_sim`, 15 iters): `knight_2_pairwise` med 2.589 ms, `knight_3_clique` 3.041, `leaper_4_mixed_clique` 3.463, `guard_6_clique` 4.011, `chimera_3_clique` 4.719 ms; checksums match golden table above.
+- **2026-05-26 round-2 baseline** (`TIME_SIM_ITERS=20`): medians 2.600 / 3.044 / 3.436 / 4.051 / 4.604 ms (same five cases); twelve new hypotheses tried, none kept (see round 2 above).

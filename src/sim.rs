@@ -114,9 +114,14 @@ impl Simulation {
 
     /// One army takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
+        self.step_turn_inner(def).0
+    }
+
+    /// `(placed, spiral_cells_examined)` — one loop iteration per examined index (including the placed cell).
+    fn step_turn_inner(&mut self, def: &GameDefinition) -> (bool, u32) {
         let turn_order_len = def.turn_order.len();
         if turn_order_len == 0 {
-            return false;
+            return (false, 0);
         }
         let army_id = def.turn_order[self.turn_order_index];
         self.turn_order_index += 1;
@@ -131,8 +136,10 @@ impl Simulation {
         let mut cursor = self.cursors[army_id];
         let mut xy = self.cursor_positions[army_id];
         let mut forb_word = forbidden.word_bits(cursor as usize >> 6);
+        let mut cells_examined = 0u32;
 
         loop {
+            cells_examined += 1;
             let bit = 1u64 << (cursor & 63);
             let occupied = occupancy.contains_index(cursor);
             let forbidden_here = forb_word & bit != 0;
@@ -140,14 +147,14 @@ impl Simulation {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
                 self.place(def, cursor, xy, army_id);
-                return true;
+                return (true, cells_examined);
             }
 
             let next = cursor + 1;
             if next == 0 {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
-                return false;
+                return (false, cells_examined);
             }
 
             let word_end = ((cursor >> 6) + 1) << 6;
@@ -161,7 +168,7 @@ impl Simulation {
                     if cursor == u32::MAX {
                         self.cursors[army_id] = cursor;
                         self.cursor_positions[army_id] = xy;
-                        return false;
+                        return (false, cells_examined);
                     }
                     forb_word = forbidden.word_bits(cursor as usize >> 6);
                     continue;
@@ -174,7 +181,7 @@ impl Simulation {
             if cursor == u32::MAX {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
-                return false;
+                return (false, cells_examined);
             }
 
             if (cursor & 63) == 0 {
@@ -366,6 +373,176 @@ mod tests {
             assert!(sim.step_turn(def));
         }
         sim
+    }
+
+    /// Rejected cells before placement on a successful turn (`cells_examined - 1`).
+    fn rejections_on_success(cells_examined: u32) -> u32 {
+        cells_examined.saturating_sub(1)
+    }
+
+    #[derive(Debug)]
+    struct RejectionStats {
+        turns_sampled: usize,
+        max_rejections: u32,
+        max_rejections_turn: usize,
+        p50_rejections: u32,
+        p99_rejections: u32,
+        mean_rejections: f64,
+    }
+
+    fn collect_rejection_stats(def: &GameDefinition, total_turns: usize, late_window: usize) -> RejectionStats {
+        let mut sim = Simulation::new(def);
+        let mut late_rejections = Vec::with_capacity(late_window.min(total_turns));
+        let mut max_rejections = 0u32;
+        let mut max_rejections_turn = 0usize;
+        let mut sum = 0u64;
+
+        for turn in 0..total_turns {
+            let (placed, examined) = sim.step_turn_inner(def);
+            assert!(placed, "turn {turn} failed to place");
+            let rejections = rejections_on_success(examined);
+            sum += rejections as u64;
+            if rejections > max_rejections {
+                max_rejections = rejections;
+                max_rejections_turn = turn + 1;
+            }
+            if turn + late_window >= total_turns {
+                late_rejections.push(rejections);
+            }
+        }
+
+        late_rejections.sort_unstable();
+        let p50 = late_rejections[late_rejections.len() / 2];
+        let p99_idx = ((late_rejections.len() as f64) * 0.99).floor() as usize;
+        let p99 = late_rejections[p99_idx.min(late_rejections.len().saturating_sub(1))];
+
+        RejectionStats {
+            turns_sampled: total_turns,
+            max_rejections,
+            max_rejections_turn,
+            p50_rejections: p50,
+            p99_rejections: p99,
+            mean_rejections: sum as f64 / total_turns as f64,
+        }
+    }
+
+    fn format_rejection_stats(label: &str, stats: &RejectionStats, late_window: usize) -> String {
+        format!(
+            "{label}: turns={} late_last={} max_rej={} @turn{} late_p50={} late_p99={} mean_rej={:.1}",
+            stats.turns_sampled,
+            late_window,
+            stats.max_rejections,
+            stats.max_rejections_turn,
+            stats.p50_rejections,
+            stats.p99_rejections,
+            stats.mean_rejections,
+        )
+    }
+
+    /// How many spiral cells are rejected before each placement in late game?
+    /// Run with `cargo testd scan_rejection -- --nocapture` to print the report.
+    #[test]
+    fn scan_rejection_late_game_presets_and_random() {
+        use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
+        use rand::SeedableRng;
+        use rand::rngs::StdRng;
+
+        const PRESET_TURNS: usize = 100_000;
+        const RANDOM_TURNS: usize = 20_000;
+        const LATE_WINDOW: usize = 1_000;
+        const THOUSAND: u32 = 1_000;
+
+        let mut global_max = 0u32;
+        let mut global_max_label = String::new();
+
+        let preset_cases: [(&str, fn() -> GameDefinition); 5] = [
+            ("knight_2_pairwise", GameDefinition::knight_2_pairwise),
+            ("knight_3_clique", GameDefinition::knight_3_clique),
+            ("leaper_4_mixed_clique", GameDefinition::leaper_4_mixed_clique),
+            ("guard_6_clique", GameDefinition::guard_6_clique),
+            ("chimera_3_clique", GameDefinition::chimera_3_clique),
+        ];
+
+        eprintln!("\n=== scan rejections (rejections = cells examined - 1 on success) ===");
+        for (name, def_fn) in preset_cases {
+            let def = def_fn();
+            let stats = collect_rejection_stats(&def, PRESET_TURNS, LATE_WINDOW);
+            eprintln!("{}", format_rejection_stats(name, &stats, LATE_WINDOW));
+            if stats.max_rejections > global_max {
+                global_max = stats.max_rejections;
+                global_max_label = name.to_string();
+            }
+        }
+
+        let random_configs: [(&str, RandomGenConfig); 4] = [
+            (
+                "random_default",
+                RandomGenConfig::default(),
+            ),
+            (
+                "random_dense_clique_like",
+                RandomGenConfig {
+                    army_count_min: 4,
+                    army_count_max: 6,
+                    attack_radius_min: 1,
+                    attack_radius_max: 3,
+                    pattern_density: 0.55,
+                    blocked_by_density: 1.0,
+                    attack_symmetry: AttackSymmetry::Both,
+                },
+            ),
+            (
+                "random_sparse",
+                RandomGenConfig {
+                    army_count_min: 2,
+                    army_count_max: 4,
+                    attack_radius_min: 2,
+                    attack_radius_max: 4,
+                    pattern_density: 0.15,
+                    blocked_by_density: 0.35,
+                    attack_symmetry: AttackSymmetry::None,
+                },
+            ),
+            (
+                "random_wide_attacks",
+                RandomGenConfig {
+                    army_count_min: 3,
+                    army_count_max: 5,
+                    attack_radius_min: 3,
+                    attack_radius_max: 5,
+                    pattern_density: 0.45,
+                    blocked_by_density: 0.85,
+                    attack_symmetry: AttackSymmetry::Vertical,
+                },
+            ),
+        ];
+
+        for (cfg_name, mut cfg) in random_configs {
+            cfg.sanitize();
+            for seed in 0..3u64 {
+                let mut rng = StdRng::seed_from_u64(seed);
+                let def = generate_random_game(&cfg, &mut rng);
+                let label = format!("{cfg_name}_seed{seed}_armies{}", def.armies.len());
+                let stats = collect_rejection_stats(&def, RANDOM_TURNS, LATE_WINDOW.min(RANDOM_TURNS));
+                eprintln!("{}", format_rejection_stats(&label, &stats, LATE_WINDOW.min(RANDOM_TURNS)));
+                if stats.max_rejections > global_max {
+                    global_max = stats.max_rejections;
+                    global_max_label = label;
+                }
+            }
+        }
+
+        eprintln!(
+            "=== overall max rejections: {global_max} ({global_max_label}); \
+             1000+ rejections/turn: {}",
+            if global_max >= THOUSAND { "YES" } else { "NO" }
+        );
+
+        assert!(
+            global_max < THOUSAND,
+            "did not expect >=1000 rejections per turn in this survey; \
+             got max {global_max} on {global_max_label}"
+        );
     }
 
     fn assert_valid_placements(def: &GameDefinition, placements: &[(u32, ArmyId)]) {
