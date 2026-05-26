@@ -19,11 +19,20 @@ use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
 
 /// How occupied spiral cells are coloured on the board texture.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum BoardColourMode {
     #[default]
     Army,
-    ScanSkips,
+}
+
+impl<'de> Deserialize<'de> for BoardColourMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let _ = String::deserialize(deserializer)?;
+        Ok(Self::Army)
+    }
 }
 
 /// Open/closed state for sidebar [`egui::CollapsingHeader`] sections (persisted in app session).
@@ -269,24 +278,11 @@ pub fn ui_game_definition(
                         false,
                         |ui| {
                             let prev = ui_state.board_colour_mode;
-                            ui.vertical(|ui| {
-                                ui.radio_value(
-                                    &mut ui_state.board_colour_mode,
-                                    BoardColourMode::Army,
-                                    "Piece colour",
-                                );
-                                ui.radio_value(
-                                    &mut ui_state.board_colour_mode,
-                                    BoardColourMode::ScanSkips,
-                                    "Scan skips",
-                                );
-                            });
-                            if ui_state.board_colour_mode == BoardColourMode::ScanSkips {
-                                ui.add_space(4.0);
-                                ui.label(
-                                    "Heat by cells rejected along the spiral before each placement.",
-                                );
-                            }
+                            ui.radio_value(
+                                &mut ui_state.board_colour_mode,
+                                BoardColourMode::Army,
+                                "Piece colour",
+                            );
                             if ui_state.board_colour_mode != prev {
                                 viewport.render_dirty = true;
                                 cache.rendered_bounds = None;
