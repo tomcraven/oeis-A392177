@@ -8,6 +8,7 @@ use crate::share_code::{self, ShareCapture};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
+use crate::CELL_SIZE;
 use crate::model::{GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
@@ -17,7 +18,7 @@ use crate::mutate::{
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
-use crate::viewport::{self, BoardZoomMode, ViewportState};
+use crate::viewport::{self, ViewportState};
 
 /// How occupied spiral cells are coloured on the board texture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -281,31 +282,6 @@ pub fn ui_game_definition(
                         if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
                         {
                             if let Projection::Orthographic(ref mut ortho) = *projection {
-                                let mut pixel_per_cell =
-                                    viewport.zoom_mode == BoardZoomMode::OnePixelPerCell;
-                                if ui
-                                    .checkbox(&mut pixel_per_cell, "1 pixel per cell")
-                                    .changed()
-                                {
-                                    viewport.zoom_mode = if pixel_per_cell {
-                                        BoardZoomMode::OnePixelPerCell
-                                    } else {
-                                        BoardZoomMode::Free
-                                    };
-                                    if pixel_per_cell {
-                                        camera_actions.center_view = true;
-                                    }
-                                }
-                                if pixel_per_cell {
-                                    ui.label(
-                                        egui::RichText::new(
-                                            "Scroll zoom off; one cell = one pixel on the tighter axis.",
-                                        )
-                                        .small()
-                                        .weak(),
-                                    );
-                                }
-
                                 sidebar_field_label(ui, "Position");
                                 ui.columns(2, |cols| {
                                     let row_h = cols[0].spacing().interact_size.y;
@@ -336,22 +312,17 @@ pub fn ui_game_definition(
                                         calibration_config::MAX_ZOOM_OUT_BUDGET
                                             .min(pan.max_scale)
                                     };
-                                if !pixel_per_cell {
-                                    ortho.scale = ortho
-                                        .scale
-                                        .clamp(pan.min_scale, effective_zoom_max);
+                                ortho.scale = ortho
+                                    .scale
+                                    .clamp(pan.min_scale, effective_zoom_max);
 
-                                    sidebar_field_label(ui, "Zoom");
-                                    ui.add(
-                                        egui::DragValue::new(&mut ortho.scale)
-                                            .range(pan.min_scale..=effective_zoom_max)
-                                            .speed(0.02)
-                                            .fixed_decimals(3),
-                                    );
-                                } else {
-                                    sidebar_field_label(ui, "Zoom");
-                                    ui.label(format!("{:.3} (locked)", ortho.scale));
-                                }
+                                sidebar_field_label(ui, "Zoom");
+                                ui.add(
+                                    egui::DragValue::new(&mut ortho.scale)
+                                        .range(pan.min_scale..=effective_zoom_max)
+                                        .speed(0.02)
+                                        .fixed_decimals(3),
+                                );
                                 ui.add_space(SIDEBAR_FIELD_GAP);
                             }
                         }
@@ -1013,7 +984,9 @@ pub fn ui_game_definition(
                     {
                         let board_width_px =
                             (window.width() - viewport.left_inset_px).ceil().max(1.0);
-                        let cells_per_screen_px = viewport::cells_per_screen_pixel(ortho);
+                        let world_per_screen_px =
+                            ortho.area.width() / board_width_px.max(1.0);
+                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
                         let board_pixels =
                             board_width_px as u64 * window.height().ceil().max(1.0) as u64;
                         ui.label(format!("Zoom scale: {:.3}", ortho.scale));
