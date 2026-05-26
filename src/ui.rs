@@ -6,7 +6,7 @@ use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
 use crate::CELL_SIZE;
-use crate::model::GameDefinition;
+use crate::model::{GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
     shared_attack_extent_for_armies, shift_attacks, toggle_random_attack_square,
@@ -29,6 +29,12 @@ pub struct UiState {
     pub edit_army: usize,
     /// Name for the next bookmark (sidebar Bookmarks section).
     pub bookmark_new_name: String,
+    /// Selected entry in [`PieceDef::piece_catalog`] for roster add.
+    pub add_piece_preset_index: usize,
+    /// Army index targeted by roster remove control.
+    pub roster_remove_army: usize,
+    /// Colour applied when adding a piece from Edit roster.
+    pub add_piece_color: Color,
 }
 
 impl Default for UiState {
@@ -41,6 +47,9 @@ impl Default for UiState {
             preset_index: 0,
             edit_army: 0,
             bookmark_new_name: String::new(),
+            add_piece_preset_index: 0,
+            roster_remove_army: 0,
+            add_piece_color: GameDefinition::default_army_color(0),
         }
     }
 }
@@ -366,7 +375,7 @@ pub fn ui_game_definition(
                             if !ui_state.mutate_all
                                 && ui_state.mutate_army >= draft.armies.len()
                             {
-                                ui_state.mutate_army = draft.armies.len() - 1;
+                                ui_state.mutate_army = draft.armies.len().saturating_sub(1);
                             }
                             let selected = if ui_state.mutate_all {
                                 "All".to_string()
@@ -520,9 +529,8 @@ pub fn ui_game_definition(
                     });
 
                     ui.collapsing("Pieces", |ui| {
-                        if draft.armies.is_empty() {
-                            ui.label("No pieces");
-                        } else {
+                        let mut open_advanced = false;
+                        if !draft.armies.is_empty() {
                             let advanced_id = ui.make_persistent_id("pieces_advanced");
                             let advanced_was_open =
                                 egui::collapsing_header::CollapsingState::load_with_default_open(
@@ -531,7 +539,6 @@ pub fn ui_game_definition(
                                     false,
                                 )
                                 .is_open();
-                            let mut open_advanced = false;
                             let row_h = draft
                                 .armies
                                 .iter()
@@ -581,12 +588,22 @@ pub fn ui_game_definition(
                                     });
                                 });
 
+                            ui.add_space(6.0);
+                        } else {
+                            ui.label("No pieces in set");
+                            ui.add_space(6.0);
+                        }
+
+                        pieces_roster_editor_ui(ui, &mut draft, &mut ui_state);
+
+                        if !draft.armies.is_empty() {
                             egui::CollapsingHeader::new("Advanced")
                                 .id_salt("pieces_advanced")
                                 .open(if open_advanced { Some(true) } else { None })
                                 .show(ui, |ui| {
                                 if ui_state.edit_army >= draft.armies.len() {
-                                    ui_state.edit_army = draft.armies.len() - 1;
+                                    ui_state.edit_army =
+                                        draft.armies.len().saturating_sub(1);
                                 }
                                 let army_idx = ui_state.edit_army;
                                 egui::ComboBox::from_id_salt("army_edit_pick")
@@ -651,9 +668,7 @@ pub fn ui_game_definition(
                                     }
                                 }
 
-                                if draft.armies.len() > 1
-                                    && ui.button("Remove piece").clicked()
-                                {
+                                if ui.button("Remove piece").clicked() {
                                     remove_draft_army(
                                         &mut draft,
                                         &mut ui_state,
@@ -844,7 +859,7 @@ fn sidebar_min_max_drag_row<T>(
 }
 
 fn remove_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {
-    if draft.armies.len() <= 1 {
+    if army_idx >= draft.armies.len() {
         return;
     }
     draft.armies.remove(army_idx);
@@ -862,12 +877,129 @@ fn remove_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_id
             *t -= 1;
         }
     }
+    if draft.armies.is_empty() {
+        draft.turn_order.clear();
+    }
     if ui_state.edit_army >= draft.armies.len() {
         ui_state.edit_army = draft.armies.len().saturating_sub(1);
     }
     if !ui_state.mutate_all && ui_state.mutate_army >= draft.armies.len() {
         ui_state.mutate_army = draft.armies.len().saturating_sub(1);
     }
+    ui_state.roster_remove_army = ui_state
+        .roster_remove_army
+        .min(draft.armies.len().saturating_sub(1));
+}
+
+fn pieces_roster_editor_ui(
+    ui: &mut egui::Ui,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+) {
+    egui::CollapsingHeader::new("Edit roster")
+        .id_salt("pieces_edit_roster")
+        .default_open(false)
+        .show(ui, |ui| {
+            pieces_roster_editor_body(ui, draft, ui_state);
+        });
+}
+
+fn pieces_roster_editor_body(
+    ui: &mut egui::Ui,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+) {
+    ui.with_layout(
+        egui::Layout::left_to_right(egui::Align::TOP).with_main_wrap(false),
+        |ui| {
+            let catalog = PieceDef::piece_catalog();
+            if ui_state.add_piece_preset_index >= catalog.len() {
+                ui_state.add_piece_preset_index = 0;
+            }
+            let preset_i = ui_state.add_piece_preset_index;
+            let (preset_label, preset_factory) = catalog[preset_i];
+            let preview_piece = preset_factory();
+
+            ui.vertical(|ui| {
+                egui::ComboBox::from_id_salt("add_piece_preset")
+                    .selected_text(preset_label)
+                    .show_ui(ui, |ui| {
+                        for (i, (label, _)) in catalog.iter().enumerate() {
+                            if ui.selectable_label(preset_i == i, *label).clicked() {
+                                ui_state.add_piece_preset_index = i;
+                            }
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    ui.label("Colour");
+                    let rgb = ui_state.add_piece_color.to_srgba();
+                    let mut arr = [rgb.red, rgb.green, rgb.blue];
+                    if ui.color_edit_button_rgb(&mut arr).changed() {
+                        ui_state.add_piece_color =
+                            Color::srgb(arr[0], arr[1], arr[2]);
+                    }
+                });
+                move_grid_preview_ui(
+                    ui,
+                    900_000 + preset_i,
+                    &preview_piece.valid_moves,
+                    ui_state.add_piece_color,
+                    false,
+                );
+                if ui.button("Add").clicked() {
+                    let color = ui_state.add_piece_color;
+                    draft.push_army_from_piece_preset(preset_label, preview_piece, color);
+                    ui_state.add_piece_color =
+                        GameDefinition::default_army_color(draft.armies.len());
+                    ui_state.edit_army = draft.armies.len().saturating_sub(1);
+                    ui_state.roster_remove_army = ui_state.edit_army;
+                    if !ui_state.mutate_all && ui_state.mutate_army >= draft.armies.len() {
+                        ui_state.mutate_army = draft.armies.len().saturating_sub(1);
+                    }
+                }
+            });
+
+            if !draft.armies.is_empty() {
+                ui.add_space(12.0);
+
+                ui.vertical(|ui| {
+                    ui.label("Remove");
+                    if ui_state.roster_remove_army >= draft.armies.len() {
+                        ui_state.roster_remove_army = draft.armies.len().saturating_sub(1);
+                    }
+                    let remove_idx = ui_state.roster_remove_army;
+                    egui::ComboBox::from_id_salt("roster_remove_pick")
+                        .selected_text(format!(
+                            "{}: {}",
+                            remove_idx, draft.armies[remove_idx].name
+                        ))
+                        .show_ui(ui, |ui| {
+                            for (aid, army) in draft.armies.iter().enumerate() {
+                                if ui
+                                    .selectable_label(
+                                        remove_idx == aid,
+                                        format!("{aid}: {}", army.name),
+                                    )
+                                    .clicked()
+                                {
+                                    ui_state.roster_remove_army = aid;
+                                }
+                            }
+                        });
+                    let can_remove = !draft.armies.is_empty();
+                    if ui
+                        .add_enabled(can_remove, egui::Button::new("Remove"))
+                        .clicked()
+                    {
+                        remove_draft_army(draft, ui_state, remove_idx);
+                        ui_state.roster_remove_army = ui_state
+                            .edit_army
+                            .min(draft.armies.len().saturating_sub(1));
+                    }
+                });
+            }
+        },
+    );
 }
 
 fn summary_preview_side_px(moves: &[(i32, i32)]) -> f32 {

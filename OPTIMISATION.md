@@ -40,7 +40,7 @@ Session baseline (forbidden-word skip only, start of perf pass) vs **2026-05-25 
 | `red_black_knights` | 3.42 | **3.16** | `6661495926608663269` |
 | `three_knights` | 3.57 | **3.36** | `14483324988186358612` |
 | `four_classic_leapers` | 3.61 | **3.47** | `13276021962575979013` |
-| `six_guards` | 4.17 | **4.17** | `4841317422612335357` |
+| `king_6_clique` | 4.17 | **4.17** | `4841317422612335357` |
 | `fusion_piece_freeforall` | 4.62 | **4.59** | `4966002382127755860` |
 
 Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'` helps some presets and hurts others on Apple Silicon; not enabled in-repo.
@@ -52,7 +52,7 @@ Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'`
 | `knight_2_pairwise` | 2.875 | **2.703** | −6.0% |
 | `knight_3_clique` | 3.111 | **2.988** | −4.0% |
 | `leaper_4_mixed_clique` | 3.614 | **3.401** | −5.9% |
-| `guard_6_clique` | 4.312 | **3.989** | −7.5% |
+| `king_6_clique` | 4.312 | **3.989** | −7.5% |
 | `chimera_3_clique` | 4.812 | **4.585** | −4.7% |
 
 ## What did not work (earlier experiments)
@@ -91,11 +91,11 @@ Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'`
 
 ## What did not work (2026-05-26 perf pass, round 2)
 
-Session baseline for A/B: `TIME_SIM_ITERS=20`, medians `knight_2_pairwise` 2.600, `knight_3_clique` 3.044, `leaper_4_mixed_clique` 3.436, `guard_6_clique` 4.051, `chimera_3_clique` 4.604 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+Session baseline for A/B: `TIME_SIM_ITERS=20`, medians `knight_2_pairwise` 2.600, `knight_3_clique` 3.044, `leaper_4_mixed_clique` 3.436, `king_6_clique` 4.051, `chimera_3_clique` 4.604 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
 
 - **Occupancy `contains_index` with explicit `i < len` branch** — regressed `knight_2_pairwise` (~2.93 ms median); reverted.
 - **Occupancy `insert` with `next_power_of_two` logical length** — mixed (multi-army medians down, `knight_2_pairwise` up ~2.95 ms); reverted.
-- **Forbidden `words` geometric growth (`next_power_of_two` capacity)** — large regression on all cases (e.g. `guard_6_clique` ~6.8 ms); extra zeroed words hurt cache; reverted.
+- **Forbidden `words` geometric growth (`next_power_of_two` capacity)** — large regression on all cases (e.g. `king_6_clique` ~6.8 ms); extra zeroed words hurt cache; reverted.
 - **`#[inline(always)]` on `spiral::{index_to_xy, xy_to_index, spiral_step}`** — noisy, no consistent win; reverted.
 - **Occupancy `insert` with `reserve` doubling before exact `resize`** — no win; reverted.
 - **Hoist `occupancy.cells` slice in `step_turn`** — no win; reverted.
@@ -126,7 +126,7 @@ cargo test --release --features bevy/dynamic_linking scan_rejection_late_game --
 | --- | ---: | ---: | ---: |
 | `knight_2_pairwise` | 108 | 23 | 1.7 |
 | `knight_3_clique` | 192 | 39 | 2.0 |
-| `guard_6_clique` | 118 | 17 | 2.0 |
+| `king_6_clique` | 118 | 17 | 2.0 |
 | `chimera_3_clique` | 92 | 4 | 1.4 |
 | Random (worst of 12) | **286** | ≤62 | ~1–5 |
 
@@ -152,15 +152,15 @@ cargo test --release --features bevy/dynamic_linking scan_rejection_late_game --
 - Exact simulation cannot skip offscreen spiral history; only the **target index** may be capped to the visible rectangle (+ margin).
 - Occupancy fast paths need a bitset **and** a skip path that is not evaluated on every rejection when it cannot fire (e.g. only when `contains_index(next)` and word-aligned occupied mask is full — still regressed when tried with maintained bitset).
 - No further low-risk CPU wins obvious without deeper profiling (`sample`/`perf`) on `step_turn` codegen (scan vs `place` / inlined `record_forbidden`). Scan-rejection survey shows per-turn rejections stay **O(1)** (max ~286 in tested configs), not thousands—see **`step_turn` scan rejections** above.
-- **2026-05-26 session baseline** (`cargo rund --release --bin time_sim`, 15 iters): `knight_2_pairwise` med 2.589 ms, `knight_3_clique` 3.041, `leaper_4_mixed_clique` 3.463, `guard_6_clique` 4.011, `chimera_3_clique` 4.719 ms; checksums match golden table above.
+- **2026-05-26 session baseline** (`cargo rund --release --bin time_sim`, 15 iters): `knight_2_pairwise` med 2.589 ms, `knight_3_clique` 3.041, `leaper_4_mixed_clique` 3.463, `king_6_clique` 4.011, `chimera_3_clique` 4.719 ms; checksums match golden table above.
 - **2026-05-26 round-2 baseline** (`TIME_SIM_ITERS=20`): medians 2.600 / 3.044 / 3.436 / 4.051 / 4.604 ms (same five cases); twelve new hypotheses tried, none kept (see round 2 above).
 
 ## What did not work (2026-05-26 perf pass, round 3)
 
-Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 3.021, `leaper_4_mixed_clique` 3.424, `guard_6_clique` 4.004, `chimera_3_clique` 4.595 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 3.021, `leaper_4_mixed_clique` 3.424, `king_6_clique` 4.004, `chimera_3_clique` 4.595 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
 
 - **Occupancy `contains_index` via explicit `idx < len` branch** — `knight_2_pairwise` median up (~3.11 ms); reverted (same idea as round-2 explicit branch regression).
-- **Proactive forbidden word-tail skip at loop head** (jump before examining `cursor` when the rest of the word is all forbidden) — extra mask work every iteration; medians up on multi-army cases (e.g. `guard_6_clique` ~4.31 ms, `chimera_3_clique` ~4.88 ms); reverted.
+- **Proactive forbidden word-tail skip at loop head** (jump before examining `cursor` when the rest of the word is all forbidden) — extra mask work every iteration; medians up on multi-army cases (e.g. `king_6_clique` ~4.31 ms, `chimera_3_clique` ~4.88 ms); reverted.
 - **`forb_word == 0` inner scan loop** (occupancy-only until word boundary) — mixed; clique presets worse despite slightly faster `knight_2_pairwise`; reverted.
 - **`#[cold]` on `place`** — within jitter / slight chimera regression; reverted.
 - **Occupancy `insert` with `index < len` branch** — noisy vs forbidden-only insert win alone; reverted.
@@ -169,14 +169,14 @@ Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `kni
 
 ## What did not work (2026-05-26 perf pass, round 4)
 
-Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.582, `knight_3_clique` 2.933, `leaper_4_mixed_clique` 3.306, `guard_6_clique` 3.893, `chimera_3_clique` 4.426 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.582, `knight_3_clique` 2.933, `leaper_4_mixed_clique` 3.306, `king_6_clique` 3.893, `chimera_3_clique` 4.426 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
 
 - **Cached `forbidden.words` slice + `word_idx` in `step_turn_scan`** (direct indexing vs `word_bits`, compare on word change) — mixed; `knight_2_pairwise` median up (~2.90 ms); reverted.
 - **Same-word batched OR in `ForbiddenSet::insert_moves_from_xy`** — only helps single-target fanout; bench presets are mostly multi-target; `knight_2_pairwise` regressed (~3.08 ms); reverted.
-- **Skip forbidden tail-skip work when `forb_word == 0`** (defer `word_end` / mask math until the active word has any forbidden bit) — noisy across three harness passes; medians often matched or exceeded baseline (e.g. `guard_6_clique` ~4.12 ms); reverted.
+- **Skip forbidden tail-skip work when `forb_word == 0`** (defer `word_end` / mask math until the active word has any forbidden bit) — noisy across three harness passes; medians often matched or exceeded baseline (e.g. `king_6_clique` ~4.12 ms); reverted.
 - **Tail-skip only when `word_end - next > 1`** — regressed multi-army medians; reverted.
 - **`ForbiddenSet::insert` via `get_unchecked_mut` on hot path** — within jitter / slight regression vs existing-word branch; reverted.
-- **`#[inline(never)]` on `place` / `record_forbidden`** — clear regression (e.g. `guard_6_clique` ~4.08 ms); reverted.
+- **`#[inline(never)]` on `place` / `record_forbidden`** — clear regression (e.g. `king_6_clique` ~4.08 ms); reverted.
 - **Forbidden membership via `(forb_word >> (cursor & 63)) & 1`** instead of `1 << bit` — mixed (`knight_2_pairwise` worse, some clique cases better); reverted.
 - **Occupancy `insert` with `index < len` branch (retry on post–round-3 tree)** — multi-army medians up; reverted.
 
@@ -184,9 +184,9 @@ Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `kni
 
 ## What did not work (2026-05-26 perf pass, round 5 — WASM-safe scope)
 
-Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 2.866, `leaper_4_mixed_clique` 3.250, `guard_6_clique` 3.846, `chimera_3_clique` 4.500 ms. Checksums unchanged; `cargo testd` passed.
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 2.866, `leaper_4_mixed_clique` 3.250, `king_6_clique` 3.846, `chimera_3_clique` 4.500 ms. Checksums unchanged; `cargo testd` passed.
 
-- **`ForbiddenSet::insert` growth via `push(bit)` when `word_index == words.len()`** (avoid `resize` for the next word only) — large regression on all bench cases (e.g. `guard_6_clique` ~7 ms); repeated `push` realloc vs batched `resize`; reverted.
+- **`ForbiddenSet::insert` growth via `push(bit)` when `word_index == words.len()`** (avoid `resize` for the next word only) — large regression on all bench cases (e.g. `king_6_clique` ~7 ms); repeated `push` realloc vs batched `resize`; reverted.
 - **Toolchain / codegen experiments (out of scope for wasm parity):** `lto = "fat"`, `#[inline(always)]` on hot helpers — not pursued; native-only and not the intended optimisation surface.
 
 **Kept (round 5):** none. `Cargo.toml` release profile remains `lto = "thin"`, `codegen-units = 1`.

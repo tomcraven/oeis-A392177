@@ -136,8 +136,8 @@ fn bench_cases() -> Vec<BenchCase> {
             turns: TURNS,
         },
         BenchCase {
-            name: "guard_6_clique",
-            def: GameDefinition::guard_6_clique,
+            name: "king_6_clique",
+            def: GameDefinition::king_6_clique,
             turns: TURNS,
         },
         BenchCase {

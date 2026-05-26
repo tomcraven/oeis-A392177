@@ -2,7 +2,7 @@ use bevy::prelude::Color;
 
 use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
 
-const N_PIECES: usize = 10;
+const N_PIECES: usize = 16;
 const N_PAIRWISE: usize = N_PIECES * N_PIECES;
 const N_CLIQUE_SIZES: usize = 4; // armies 2..=5
 const N_SAME_CLIQUES: usize = N_PIECES * N_CLIQUE_SIZES;
@@ -19,6 +19,12 @@ const SIMPLE_PIECES: [(&str, fn() -> PieceDef); N_PIECES] = [
     ("zebra", PieceDef::zebra),
     ("giraffe", PieceDef::giraffe),
     ("trebuchet", PieceDef::trebuchet),
+    ("antelope", PieceDef::antelope),
+    ("tripper", PieceDef::tripper),
+    ("fourleaper", PieceDef::fourleaper),
+    ("gnu", PieceDef::gnu),
+    ("hippogriff", PieceDef::hippogriff),
+    ("chimera", PieceDef::chimera),
 ];
 
 const MIXED: [(&str, &str, [&'static str; 3]); N_MIXED] = [
@@ -283,6 +289,6 @@ mod tests {
 
     #[test]
     fn catalog_len_matches_sections() {
-        assert_eq!(catalog_len(), 100 + 40 + 12);
+        assert_eq!(catalog_len(), 256 + 64 + 12);
     }
 }

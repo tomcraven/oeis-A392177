@@ -210,12 +210,20 @@ impl Simulation {
     }
 
     pub fn needs_work(&self, target_index: u32) -> bool {
+        if self.cursors.is_empty() {
+            return false;
+        }
         self.cursors.iter().any(|&c| c <= target_index)
     }
 
     pub fn advance_to_target(&mut self, def: &GameDefinition, target_index: u32) {
+        if def.armies.is_empty() || def.turn_order.is_empty() {
+            return;
+        }
         while self.needs_work(target_index) {
-            self.step_turn(def);
+            if !self.step_turn(def) {
+                break;
+            }
         }
     }
 
@@ -225,10 +233,15 @@ impl Simulation {
         target_index: u32,
         max_duration: Duration,
     ) {
+        if def.armies.is_empty() || def.turn_order.is_empty() {
+            return;
+        }
         let start = Instant::now();
         let mut turns_since_check = 0u32;
         while self.needs_work(target_index) {
-            self.step_turn(def);
+            if !self.step_turn(def) {
+                break;
+            }
             turns_since_check += 1;
 
             // Checking the clock every turn costs too much in this hot loop.
@@ -483,7 +496,7 @@ mod tests {
             ("knight_2_pairwise", GameDefinition::knight_2_pairwise),
             ("knight_3_clique", GameDefinition::knight_3_clique),
             ("leaper_4_mixed_clique", GameDefinition::leaper_4_mixed_clique),
-            ("guard_6_clique", GameDefinition::guard_6_clique),
+            ("king_6_clique", GameDefinition::king_6_clique),
             ("chimera_3_clique", GameDefinition::chimera_3_clique),
         ];
 
@@ -621,8 +634,8 @@ mod tests {
                 ],
             },
             GoldenCase {
-                name: "guard_6_clique",
-                def: GameDefinition::guard_6_clique,
+                name: "king_6_clique",
+                def: GameDefinition::king_6_clique,
                 checksums: [
                     6_480_521_862_097_834_845,
                     15_603_942_777_120_392_349,
@@ -648,7 +661,7 @@ mod tests {
 
     #[test]
     fn hot_path_vec_capacity_growth_is_bounded() {
-        let def = GameDefinition::guard_6_clique();
+        let def = GameDefinition::king_6_clique();
         let mut sim = Simulation::new(&def);
         let mut capacity_events = 0usize;
 

@@ -108,6 +108,9 @@ mod threaded {
         }
 
         pub fn needs_work(&self, target_index: u32) -> bool {
+            if self.display.cursors.is_empty() {
+                return false;
+            }
             self.display
                 .cursors
                 .iter()
@@ -341,6 +344,9 @@ impl SimulationBridge {
     }
 
     pub fn needs_work(&self, target_index: u32) -> bool {
+        if self.display.cursors.is_empty() {
+            return false;
+        }
         self.display
             .cursors
             .iter()

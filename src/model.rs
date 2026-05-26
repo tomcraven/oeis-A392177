@@ -87,14 +87,49 @@ impl PieceDef {
         }
     }
 
-    /// Knight plus camel (fictional long leaper).
-    pub fn hippogriff() -> Self {
+    /// Knight plus camel (standard fairy-chess **gnu**).
+    pub fn gnu() -> Self {
         Self::merge(&[Self::knight(), Self::camel()])
     }
 
-    /// Orthogonal and diagonal one-step (king without castling semantics).
-    pub fn guard() -> Self {
-        Self::king()
+    /// Knight plus zebra (distinct compound leaper).
+    pub fn hippogriff() -> Self {
+        Self::merge(&[Self::knight(), Self::zebra()])
+    }
+
+    /// Knight plus wazir plus alfil (used in chimera presets).
+    pub fn chimera() -> Self {
+        Self::merge(&[Self::knight(), Self::wazir(), Self::alfil()])
+    }
+
+    /// (3, 4) leaper.
+    pub fn antelope() -> Self {
+        Self {
+            valid_moves: vec![
+                (3, 4),
+                (4, 3),
+                (4, -3),
+                (3, -4),
+                (-3, -4),
+                (-4, -3),
+                (-4, 3),
+                (-3, 4),
+            ],
+        }
+    }
+
+    /// (3, 3) diagonal leaper.
+    pub fn tripper() -> Self {
+        Self {
+            valid_moves: vec![(3, 3), (3, -3), (-3, 3), (-3, -3)],
+        }
+    }
+
+    /// (4, 0) orthogonal leaper.
+    pub fn fourleaper() -> Self {
+        Self {
+            valid_moves: vec![(4, 0), (-4, 0), (0, 4), (0, -4)],
+        }
     }
 
     /// Wide but short leaper: (±3, ±1) and (±1, ±3) only.
@@ -129,6 +164,28 @@ impl PieceDef {
         valid_moves.sort_by_key(|&(x, y)| (x, y));
         valid_moves.dedup();
         Self { valid_moves }
+    }
+
+    /// Named constructors for the piece picker (attack pattern only).
+    pub fn piece_catalog() -> &'static [(&'static str, fn() -> PieceDef)] {
+        &[
+            ("knight", PieceDef::knight),
+            ("wazir", PieceDef::wazir),
+            ("dabbaba", PieceDef::dabbaba),
+            ("ferz", PieceDef::ferz),
+            ("alfil", PieceDef::alfil),
+            ("king", PieceDef::king),
+            ("camel", PieceDef::camel),
+            ("zebra", PieceDef::zebra),
+            ("antelope", PieceDef::antelope),
+            ("gnu", PieceDef::gnu),
+            ("hippogriff", PieceDef::hippogriff),
+            ("chimera", PieceDef::chimera),
+            ("giraffe", PieceDef::giraffe),
+            ("trebuchet", PieceDef::trebuchet),
+            ("tripper", PieceDef::tripper),
+            ("fourleaper", PieceDef::fourleaper),
+        ]
     }
 }
 
@@ -334,16 +391,16 @@ impl GameDefinition {
         )
     }
 
-    pub fn guard_4_clique() -> Self {
-        clique("guard", PieceDef::guard(), 4)
-    }
-
-    pub fn guard_6_clique() -> Self {
-        clique("guard", PieceDef::guard(), 6)
-    }
-
     pub fn king_3_clique() -> Self {
         clique("king", PieceDef::king(), 3)
+    }
+
+    pub fn king_4_clique() -> Self {
+        clique("king", PieceDef::king(), 4)
+    }
+
+    pub fn king_6_clique() -> Self {
+        clique("king", PieceDef::king(), 6)
     }
 
     pub fn camel_2_pairwise() -> Self {
@@ -433,13 +490,11 @@ impl GameDefinition {
     }
 
     pub fn chimera_3_clique() -> Self {
-        let chimera = PieceDef::merge(&[PieceDef::knight(), PieceDef::wazir(), PieceDef::alfil()]);
-        clique("chimera", chimera, 3)
+        clique("chimera", PieceDef::chimera(), 3)
     }
 
     pub fn chimera_4_clique() -> Self {
-        let chimera = PieceDef::merge(&[PieceDef::knight(), PieceDef::wazir(), PieceDef::alfil()]);
-        clique("chimera", chimera, 4)
+        clique("chimera", PieceDef::chimera(), 4)
     }
 
     pub fn giraffe_2_pairwise() -> Self {
@@ -495,6 +550,35 @@ impl GameDefinition {
         &self.armies[id]
     }
 
+    /// Append a new army using a catalog piece; default name `{label}_{id}`.
+    /// `blocked_by` is wired to every other army (same as clique presets).
+    pub fn push_army_from_piece_preset(
+        &mut self,
+        preset_label: &str,
+        piece: PieceDef,
+        color: Color,
+    ) {
+        let id = self.armies.len();
+        let n = id + 1;
+        for army in &mut self.armies {
+            if !army.blocked_by.contains(&id) {
+                army.blocked_by.push(id);
+            }
+        }
+        self.armies.push(army(
+            &format!("{preset_label}_{id}"),
+            color,
+            piece,
+            all_but(id, n),
+        ));
+        self.turn_order.push(id);
+    }
+
+    /// Distinct army colour for roster slot `index` (same palette as clique presets).
+    pub fn default_army_color(index: usize) -> Color {
+        hue(index, index + 1)
+    }
+
     /// Preset label and constructor for the UI.
     pub fn preset_catalog() -> &'static [(&'static str, fn() -> GameDefinition)] {
         &[
@@ -525,9 +609,9 @@ impl GameDefinition {
             ),
             ("orthogonal_3_clique", GameDefinition::orthogonal_3_clique),
             ("ferz_alfil_2_pairwise", GameDefinition::ferz_alfil_2_pairwise),
-            ("guard_4_clique", GameDefinition::guard_4_clique),
-            ("guard_6_clique", GameDefinition::guard_6_clique),
             ("king_3_clique", GameDefinition::king_3_clique),
+            ("king_4_clique", GameDefinition::king_4_clique),
+            ("king_6_clique", GameDefinition::king_6_clique),
             ("camel_2_pairwise", GameDefinition::camel_2_pairwise),
             ("camel_3_clique", GameDefinition::camel_3_clique),
             ("zebra_2_pairwise", GameDefinition::zebra_2_pairwise),
