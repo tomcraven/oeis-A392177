@@ -39,7 +39,7 @@ fn main() {
     ];
 
     println!(
-        "case\tturns\tchecksum\tstep_ms\tplace_replay_ms\tscan_est_ms\tscan_pct\tcells_per_place\tforb_ins_per_place"
+        "case\tturns\tchecksum\tstep_ms\tplace_replay_ms\tscan_est_ms\tscan_pct\tcells_per_place\tforb_ins_per_place\tforb_combines_per_cell"
     );
 
     for (name, def_fn) in cases {
@@ -234,9 +234,11 @@ fn print_summary_row(
     let scan_pct = 100.0 * scan_ms / step_ms;
     let cells_per_place = work.scan_cells_examined as f64 / work.placements as f64;
     let forb_ins_per_place = work.forbidden_bit_inserts as f64 / work.placements as f64;
+    let forb_combines_per_cell =
+        work.scan_forb_word_combines as f64 / work.scan_cells_examined.max(1) as f64;
 
     println!(
-        "{name}\t{TURNS}\t{checksum}\t{step_ms:.3}\t{place_ms:.3}\t{scan_ms:.3}\t{scan_pct:.1}\t{cells_per_place:.2}\t{forb_ins_per_place:.1}"
+        "{name}\t{TURNS}\t{checksum}\t{step_ms:.3}\t{place_ms:.3}\t{scan_ms:.3}\t{scan_pct:.1}\t{cells_per_place:.2}\t{forb_ins_per_place:.1}\t{forb_combines_per_cell:.3}"
     );
 }
 
@@ -255,16 +257,19 @@ fn print_fanout_report(
 
     eprintln!("\n=== forbidden fanout: {name} ===");
     eprintln!(
-        "  graph: {} armies; threatened targets per attacker (first army): {}",
-        def.armies.len(),
-        threatened_targets(def, 0)
+        "  layer inserts/placement: {} moves (attack_layers; no cross-target fanout)",
+        work.forbidden_bit_inserts as f64 / work.placements.max(1) as f64
     );
     eprintln!(
-        "  inserts/placement (nominal): moves×targets — e.g. army0: {} moves × {} targets = {} (100k turns → {} total inserts)",
-        def.army(0).piece.valid_moves.len(),
-        threatened_targets(def, 0),
-        def.army(0).piece.valid_moves.len() * threatened_targets(def, 0),
-        work.forbidden_bit_inserts
+        "  scan: cells/placement {:.2}; combined_forbidden_word calls/placement {:.2} ({:.3} per cell examined)",
+        work.scan_cells_examined as f64 / work.placements.max(1) as f64,
+        work.scan_forb_word_combines as f64 / work.placements.max(1) as f64,
+        work.scan_forb_word_combines as f64 / work.scan_cells_examined.max(1) as f64
+    );
+    eprintln!(
+        "  graph: {} armies; defenders respecting army0: {}",
+        def.armies.len(),
+        threatened_targets(def, 0)
     );
 
     eprintln!("  insert path (full 100k run):");

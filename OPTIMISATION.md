@@ -292,3 +292,21 @@ Semantically `forbidden[d]` equals `⋁_{a ∈ respected(d)} attack_layers[a]`; 
 Confirming run medians after layers: 2.910 / 2.755 / 2.770 / 2.856 / 4.030 ms.
 
 Harness: `cargo rund --release --bin time_sim`; `profile_place` insert counts are now per-layer (see `inserts_per_placement = moves`).
+
+## Post–attack-layers scan vs place (2026-05-26)
+
+Method: `cargo run --release --features place_profile,bevy/dynamic_linking --bin profile_place` — median of 5× full `step_turn` vs 5× place-only replay on the same 100k stream; `scan_est = step − place_replay`. `combined_forbidden_word` invocations counted during the profiled collect pass (`forb_combines_per_cell` = combines ÷ cells examined).
+
+**`time_sim` medians** (`TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, same session): 2.476 / 2.681 / 2.723 / 2.810 / 3.960 ms (checksums unchanged).
+
+| Case | step (profile) | place replay | scan est. | scan % | cells/place | layer ins/place | forb combine/cell |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | ~4.04 | ~2.58 | ~1.45 | ~36% | ~2.67 | 8 | ~0.39 |
+| `knight_3_clique` | ~3.43 | ~2.30 | ~1.13 | ~33% | ~2.95 | 8 | ~0.36 |
+| `leaper_4_mixed_clique` | ~3.61 | ~2.26 | ~1.34 | ~37% | ~2.94 | 8 | ~0.36 |
+| `king_6_clique` | ~3.58 | ~2.42 | ~1.15 | ~32% | ~2.97 | 8 | ~0.37 |
+| `chimera_3_clique` | ~4.90 | ~3.87 | ~1.04 | ~21% | ~2.36 | 16 | ~0.44 |
+
+**Place replay (isolated components, median):** `xy_to_index` dominates knight/leaper/king presets (~59–63% of place replay); layer `ForbiddenSet::insert` ~18–20% (single-set replay); chimera ~72% xy / ~32% forb (16 moves). Occupancy ~2–4%.
+
+**Takeaways:** Forbidden write fanout is gone; **scan is ~⅓ of step** on multi-army benches (up from ~8–15% pre-layers). `forb_combines_per_cell` ≈ **1 ÷ cells_per_place** (~0.36–0.44): one `combined_forbidden_word` at scan start each turn, plus occasional word-boundary/tail-skip reloads — not one OR per examined cell. Scan time is mostly **occupancy check + spiral_step + index_to_xy**, not layer OR. Further sim CPU without algorithm change targets the scan loop, not place fanout. **`chimera_3_clique`** remains slowest via **2× move count** on place, not scan.

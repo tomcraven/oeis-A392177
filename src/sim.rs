@@ -394,6 +394,10 @@ fn combined_forbidden_word(
     respected: &[ArmyId],
     word_index: usize,
 ) -> u64 {
+    #[cfg(feature = "place_profile")]
+    if crate::place_profile::profiling_active() {
+        crate::place_profile::note_scan_forb_word_combine();
+    }
     match respected {
         [] => 0,
         [a] => layers[*a].word_bits(word_index),

@@ -12,6 +12,8 @@ pub struct PlaceWorkStats {
     pub forbidden_bit_inserts: u64,
     pub occupancy_grows: u64,
     pub forbidden_word_grows: u64,
+    /// How often `combined_forbidden_word` runs during scan (feature `place_profile`).
+    pub scan_forb_word_combines: u64,
 }
 
 /// Per-`ForbiddenSet::insert` call during a profiled run.
@@ -85,6 +87,13 @@ pub fn add_scan_cells(n: u64) {
         return;
     }
     WORK.with(|w| w.borrow_mut().scan_cells_examined += n);
+}
+
+pub fn note_scan_forb_word_combine() {
+    if !profiling_enabled() {
+        return;
+    }
+    WORK.with(|w| w.borrow_mut().scan_forb_word_combines += 1);
 }
 
 pub fn note_placement_work(valid_moves: u64, targets: u64) {
