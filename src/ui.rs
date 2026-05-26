@@ -18,11 +18,21 @@ use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
 
+/// How occupied spiral cells are coloured on the board texture.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BoardColourMode {
+    #[default]
+    Army,
+    ScanSkips,
+}
+
 /// Open/closed state for sidebar [`egui::CollapsingHeader`] sections (persisted in app session).
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct SidebarSections {
     #[serde(default)]
     pub view: bool,
+    #[serde(default)]
+    pub colouring: bool,
     #[serde(default)]
     pub presets: bool,
     #[serde(default)]
@@ -46,6 +56,7 @@ pub struct SidebarSections {
 #[derive(Resource)]
 pub struct UiState {
     pub draft: Option<GameDefinition>,
+    pub board_colour_mode: BoardColourMode,
     pub random_gen: RandomGenConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
     pub mutate_army: usize,
@@ -68,6 +79,7 @@ impl Default for UiState {
     fn default() -> Self {
         Self {
             draft: None,
+            board_colour_mode: BoardColourMode::default(),
             random_gen: RandomGenConfig::default(),
             mutate_army: 0,
             mutate_all: false,
@@ -249,6 +261,38 @@ pub fn ui_game_definition(
                             }
                         }
                     });
+                    ui_state.sidebar.colouring = sidebar_collapsing(
+                        ui,
+                        "colouring",
+                        "Colouring",
+                        ui_state.sidebar.colouring,
+                        false,
+                        |ui| {
+                            let prev = ui_state.board_colour_mode;
+                            ui.vertical(|ui| {
+                                ui.radio_value(
+                                    &mut ui_state.board_colour_mode,
+                                    BoardColourMode::Army,
+                                    "Piece colour",
+                                );
+                                ui.radio_value(
+                                    &mut ui_state.board_colour_mode,
+                                    BoardColourMode::ScanSkips,
+                                    "Scan skips",
+                                );
+                            });
+                            if ui_state.board_colour_mode == BoardColourMode::ScanSkips {
+                                ui.add_space(4.0);
+                                ui.label(
+                                    "Heat by cells rejected along the spiral before each placement.",
+                                );
+                            }
+                            if ui_state.board_colour_mode != prev {
+                                viewport.render_dirty = true;
+                                cache.rendered_bounds = None;
+                            }
+                        },
+                    );
                     ui_state.sidebar.bookmarks = sidebar_collapsing(
                         ui,
                         "bookmarks",

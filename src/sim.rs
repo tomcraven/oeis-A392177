@@ -64,7 +64,14 @@ impl Simulation {
         self.placements.clear();
     }
 
-    fn place(&mut self, def: &GameDefinition, index: u32, xy: (i32, i32), army_id: ArmyId) {
+    fn place(
+        &mut self,
+        def: &GameDefinition,
+        index: u32,
+        xy: (i32, i32),
+        army_id: ArmyId,
+        scan_rejections: u32,
+    ) {
         #[cfg(feature = "place_profile")]
         if crate::place_profile::profiling_active() {
             let moves = def.army(army_id).piece.valid_moves.len() as u64;
@@ -72,7 +79,7 @@ impl Simulation {
             let place_start = crate::place_profile::timing_enabled_for_place()
                 .then(Instant::now);
             crate::place_profile::time_occupancy_insert(|| {
-                self.occupancy.insert(index, army_id);
+                self.occupancy.insert(index, army_id, scan_rejections);
             });
             crate::place_profile::time_record_forbidden(|| {
                 self.record_forbidden(def, xy, army_id);
@@ -84,13 +91,13 @@ impl Simulation {
                 crate::place_profile::add_place_total_ns(place_start.elapsed().as_nanos() as u64);
             }
         } else {
-            self.occupancy.insert(index, army_id);
+            self.occupancy.insert(index, army_id, scan_rejections);
             self.record_forbidden(def, xy, army_id);
             self.placements.push((index, army_id));
         }
         #[cfg(not(feature = "place_profile"))]
         {
-            self.occupancy.insert(index, army_id);
+            self.occupancy.insert(index, army_id, scan_rejections);
             self.record_forbidden(def, xy, army_id);
             self.placements.push((index, army_id));
         }
@@ -134,7 +141,7 @@ impl Simulation {
         xy: (i32, i32),
         army_id: ArmyId,
     ) {
-        self.place(def, index, xy, army_id);
+        self.place(def, index, xy, army_id, 0);
     }
 
     fn step_turn_scan<const COUNT_CELLS: bool>(
@@ -161,8 +168,10 @@ impl Simulation {
         let mut xy = self.cursor_positions[army_id];
         let mut forb_word =
             combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+        let mut examined = 0u32;
 
         loop {
+            examined += 1;
             if COUNT_CELLS {
                 *cells_examined += 1;
             }
@@ -172,7 +181,7 @@ impl Simulation {
             if !occupied && !forbidden_here {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
-                self.place(def, cursor, xy, army_id);
+                self.place(def, cursor, xy, army_id, examined.saturating_sub(1));
                 return true;
             }
 
@@ -273,30 +282,47 @@ impl Simulation {
 #[derive(Clone, Debug, Default)]
 pub struct OccupancyGrid {
     cells: Vec<ArmyId>,
+    /// Spiral scan rejections recorded when each cell was placed (same length as `cells`).
+    scan_rejections: Vec<u32>,
 }
 
 impl OccupancyGrid {
     fn new() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Vec::new(),
+            scan_rejections: Vec::new(),
+        }
     }
 
     fn clear(&mut self) {
         self.cells.clear();
+        self.scan_rejections.clear();
     }
 
-    fn insert(&mut self, index: u32, army_id: ArmyId) {
+    fn insert(&mut self, index: u32, army_id: ArmyId, scan_rejections: u32) {
         let index = index as usize;
         if index >= self.cells.len() {
             #[cfg(feature = "place_profile")]
             crate::place_profile::note_occupancy_grow();
             self.cells.resize(index + 1, EMPTY_ARMY);
+            self.scan_rejections.resize(index + 1, 0);
         }
         self.cells[index] = army_id;
+        self.scan_rejections[index] = scan_rejections;
     }
 
     pub fn get(&self, index: &u32) -> Option<&ArmyId> {
         let army_id = self.cells.get(*index as usize)?;
         (*army_id != EMPTY_ARMY).then_some(army_id)
+    }
+
+    pub fn scan_rejections(&self, index: u32) -> Option<u32> {
+        let i = index as usize;
+        let army_id = self.cells.get(i)?;
+        if *army_id == EMPTY_ARMY {
+            return None;
+        }
+        Some(self.scan_rejections.get(i).copied().unwrap_or(0))
     }
 
     fn contains_index(&self, index: u32) -> bool {
