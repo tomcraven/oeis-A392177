@@ -9,6 +9,12 @@ use bevy_egui::{
     input::write_egui_wants_input_system,
 };
 
+use red_black_knights::board_export::{BoardExportPending, run_board_export};
+#[cfg(not(target_family = "wasm"))]
+use red_black_knights::board_export::BoardExportDialogState;
+#[cfg(target_family = "wasm")]
+use red_black_knights::board_export::BoardExportWasmJob;
+
 use red_black_knights::app_session::{self, AppSessionCache};
 use red_black_knights::camera::{self, camera_controls};
 use red_black_knights::model::GameDefinition;
@@ -23,74 +29,82 @@ use red_black_knights::viewport::{
 };
 
 fn main() {
-    App::new()
-        .add_plugins(
-            DefaultPlugins
-                .set(WindowPlugin {
-                    primary_window: Some(Window {
-                        title: "Red & Black Knights".into(),
-                        resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
-                        ..default()
-                    }),
+    let mut app = App::new();
+    app.add_plugins(
+        DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "Red & Black Knights".into(),
+                    resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
                     ..default()
-                })
-                .set(AssetPlugin {
-                    meta_check: AssetMetaCheck::Never,
-                    ..default()
-                })
-                .set(ImagePlugin::default_nearest()),
+                }),
+                ..default()
+            })
+            .set(AssetPlugin {
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(ImagePlugin::default_nearest()),
+    )
+    .add_plugins(EguiPlugin::default())
+    .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
+    .init_resource::<GameDefinition>()
+    .init_resource::<UiState>()
+    .init_resource::<red_black_knights::bookmark_config::BookmarkStore>()
+    .init_resource::<RenderCache>()
+    .init_resource::<ViewportState>()
+    .init_resource::<AppSessionCache>()
+    .init_resource::<BoardExportPending>()
+    .init_resource::<camera::BoardPointerState>()
+    .init_resource::<camera::PendingCameraAction>();
+
+    #[cfg(not(target_family = "wasm"))]
+    app.insert_non_send_resource(BoardExportDialogState::default());
+    #[cfg(target_family = "wasm")]
+    app.init_resource::<BoardExportWasmJob>();
+
+    app.add_systems(
+        Startup,
+        (
+            disable_egui_auto_primary_context,
+            setup_camera,
+            load_bookmarks,
+            app_session::apply_saved_app_session,
+            setup_sim_worker,
+            setup_render_assets,
+            setup_smoke_test,
         )
-        .add_plugins(EguiPlugin::default())
-        .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
-        .init_resource::<GameDefinition>()
-        .init_resource::<UiState>()
-        .init_resource::<red_black_knights::bookmark_config::BookmarkStore>()
-        .init_resource::<RenderCache>()
-        .init_resource::<ViewportState>()
-        .init_resource::<AppSessionCache>()
-        .init_resource::<camera::BoardPointerState>()
-        .init_resource::<camera::PendingCameraAction>()
-        .add_systems(
-            Startup,
-            (
-                disable_egui_auto_primary_context,
-                setup_camera,
-                load_bookmarks,
-                app_session::apply_saved_app_session,
-                setup_sim_worker,
-                setup_render_assets,
-                setup_smoke_test,
-            )
-                .chain(),
+            .chain(),
+    )
+    .add_systems(EguiPrimaryContextPass, ui_game_definition)
+    .add_systems(
+        PostUpdate,
+        run_board_export.after(EguiPostUpdateSet::EndPass),
+    )
+    .add_systems(
+        Update,
+        (
+            camera::apply_camera_actions,
+            sync_army_materials,
+            smoke_test_exit,
         )
-        .add_systems(
-            EguiPrimaryContextPass,
-            ui_game_definition,
+            .chain(),
+    )
+    .add_systems(
+        PostUpdate,
+        (
+            sync_board_camera_viewport.before(CameraUpdateSystems),
+            camera_controls.after(write_egui_wants_input_system),
+            camera::camera_zoom_controls.after(write_egui_wants_input_system),
+            camera::camera_pointer_controls.after(write_egui_wants_input_system),
+            sync_simulation_to_viewport,
+            app_session::persist_app_session.after(EguiPostUpdateSet::EndPass),
+            draw_spiral_cells,
+            camera::clamp_camera_zoom_to_texture_limit,
         )
-        .add_systems(
-            Update,
-            (
-                camera::apply_camera_actions,
-                sync_army_materials,
-                smoke_test_exit,
-            )
-                .chain(),
-        )
-        .add_systems(
-            PostUpdate,
-            (
-                sync_board_camera_viewport.before(CameraUpdateSystems),
-                camera_controls.after(write_egui_wants_input_system),
-                camera::camera_zoom_controls.after(write_egui_wants_input_system),
-                camera::camera_pointer_controls.after(write_egui_wants_input_system),
-                sync_simulation_to_viewport,
-                app_session::persist_app_session.after(EguiPostUpdateSet::EndPass),
-                draw_spiral_cells,
-                camera::clamp_camera_zoom_to_texture_limit,
-            )
-                .chain(),
-        )
-        .run();
+            .chain(),
+    )
+    .run();
 }
 
 #[derive(Resource, Default)]

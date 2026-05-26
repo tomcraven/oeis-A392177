@@ -2,6 +2,7 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use serde::{Deserialize, Serialize};
 
+use crate::board_export;
 use crate::bookmark_config::{Bookmark, BookmarkStore};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
@@ -82,6 +83,8 @@ pub struct UiState {
     /// Colour applied when adding a piece from Edit roster.
     pub add_piece_color: Color,
     pub sidebar: SidebarSections,
+    /// Short-lived status after exporting the board (sidebar View section).
+    pub export_status: Option<String>,
 }
 
 impl Default for UiState {
@@ -99,6 +102,7 @@ impl Default for UiState {
             roster_remove_army: 0,
             add_piece_color: GameDefinition::default_army_color(0),
             sidebar: SidebarSections::default(),
+            export_status: None,
         }
     }
 }
@@ -195,6 +199,11 @@ pub fn ui_game_definition(
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
+    mut board_export_pending: ResMut<board_export::BoardExportPending>,
+    #[cfg(not(target_family = "wasm"))]
+    board_export_dialog: NonSend<board_export::BoardExportDialogState>,
+    #[cfg(target_family = "wasm")]
+    board_export_wasm: Res<board_export::BoardExportWasmJob>,
     mut camera_q: Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
@@ -216,6 +225,45 @@ pub fn ui_game_definition(
                     ui_state.sidebar.view = sidebar_collapsing(ui, "view", "View", ui_state.sidebar.view, false, |ui| {
                         if ui.button("Center view").clicked() {
                             camera_actions.center_view = true;
+                        }
+
+                        ui.add_space(4.0);
+                        if ui.button("Export PNG").clicked() {
+                            ui_state.export_status = if let Some(bounds) = viewport.bounds {
+                                let queued = {
+                                    #[cfg(not(target_family = "wasm"))]
+                                    {
+                                        board_export::queue_board_png_export(
+                                            &mut board_export_pending,
+                                            bounds,
+                                            &board_export_dialog,
+                                        )
+                                    }
+                                    #[cfg(target_family = "wasm")]
+                                    {
+                                        board_export::queue_board_png_export(
+                                            &mut board_export_pending,
+                                            bounds,
+                                            &board_export_wasm,
+                                        )
+                                    }
+                                };
+                                match queued {
+                                    Ok(()) => Some(
+                                        if cfg!(target_family = "wasm") {
+                                            "Exporting…".into()
+                                        } else {
+                                            "Choose save location…".into()
+                                        },
+                                    ),
+                                    Err(err) => Some(err),
+                                }
+                            } else {
+                                Some("Board not ready yet".into())
+                            };
+                        }
+                        if let Some(status) = &ui_state.export_status {
+                            ui.label(status);
                         }
 
                         ui.add_space(4.0);

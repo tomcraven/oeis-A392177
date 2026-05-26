@@ -20,8 +20,6 @@ use crate::viewport::GridBounds;
 use crate::CELL_SIZE;
 
 const EMPTY_RGBA: [u8; 4] = [31, 31, 41, 255];
-/// Max spiral cells rasterized (≈ 2105×1692 knight settle view fits; ~14 MiB RGBA at 1 px/cell).
-const MAX_BOARD_CELLS: i64 = 6_000_000;
 const BOUNDS_PADDING: i32 = 2;
 /// PNG pixels per spiral cell (matches in-game board texel footprint by default).
 pub const DEFAULT_CELL_PIXEL_SCALE: u32 = CELL_SIZE as u32;
@@ -340,6 +338,22 @@ pub fn bounds_from_placements(placements: &[(u32, ArmyId)], padding: i32) -> Gri
     }
 }
 
+pub fn encode_board_png(
+    def: &GameDefinition,
+    occupancy: &crate::sim::OccupancyGrid,
+    bounds: GridBounds,
+    cell_pixel_scale: u32,
+) -> std::io::Result<Vec<u8>> {
+    let out = raster_board_rgba(def, occupancy, bounds, cell_pixel_scale)?;
+    let mut buf = Vec::new();
+    out.write_to(
+        &mut std::io::Cursor::new(&mut buf),
+        image::ImageFormat::Png,
+    )
+    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    Ok(buf)
+}
+
 pub fn write_board_png(
     def: &GameDefinition,
     occupancy: &crate::sim::OccupancyGrid,
@@ -347,13 +361,148 @@ pub fn write_board_png(
     cell_pixel_scale: u32,
     path: &Path,
 ) -> std::io::Result<()> {
-    let cell_pixel_scale = sanitize_cell_pixel_scale(cell_pixel_scale);
-    if bounds.cell_count() as i64 > MAX_BOARD_CELLS {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "board bounds too large to render",
-        ));
+    let mut raster = BoardPngRaster::new(def, occupancy, bounds, cell_pixel_scale)?;
+    while !raster.advance(u32::MAX) {}
+    raster.write_png(path)
+}
+
+/// Incremental raster + PNG encode (used for WASM export spread across frames).
+pub struct BoardPngRaster {
+    bounds: GridBounds,
+    occupancy: crate::sim::OccupancyGrid,
+    army_colors: Vec<[u8; 4]>,
+    cell_pixel_scale: u32,
+    width: u32,
+    height: u32,
+    out_w: u32,
+    out_h: u32,
+    row_stride: usize,
+    grid_row: Vec<u8>,
+    out_data: Vec<u8>,
+    next_row: u32,
+}
+
+impl BoardPngRaster {
+    pub fn new(
+        def: &GameDefinition,
+        occupancy: &crate::sim::OccupancyGrid,
+        bounds: GridBounds,
+        cell_pixel_scale: u32,
+    ) -> std::io::Result<Self> {
+        let cell_pixel_scale = sanitize_cell_pixel_scale(cell_pixel_scale);
+        let grid_size = grid_texture_size(bounds);
+        let width = grid_size.x;
+        let height = grid_size.y;
+        let out_w = width.saturating_mul(cell_pixel_scale);
+        let out_h = height.saturating_mul(cell_pixel_scale);
+        let out_len = (out_w as usize)
+            .saturating_mul(out_h as usize)
+            .saturating_mul(4);
+        Ok(Self {
+            bounds,
+            occupancy: occupancy.clone(),
+            army_colors: def.armies.iter().map(|a| rgba8(a.color)).collect(),
+            cell_pixel_scale,
+            width,
+            height,
+            out_w,
+            out_h,
+            row_stride: (out_w * 4) as usize,
+            grid_row: vec![0u8; (width * 4) as usize],
+            out_data: vec![0u8; out_len],
+            next_row: 0,
+        })
     }
+
+    pub fn progress(&self) -> f32 {
+        if self.height == 0 {
+            1.0
+        } else {
+            self.next_row as f32 / self.height as f32
+        }
+    }
+
+    /// Raster up to `max_grid_rows` more spiral rows. Returns `true` when finished.
+    pub fn advance(&mut self, max_grid_rows: u32) -> bool {
+        let mut processed = 0u32;
+        while self.next_row < self.height && processed < max_grid_rows {
+            let y = self.bounds.min_y + self.next_row as i32;
+            for x in self.bounds.min_x..=self.bounds.max_x {
+                let px = (x - self.bounds.min_x) as u32;
+                let index = crate::spiral::xy_to_index(x, y);
+                let color = if let Some(army_id) = self.occupancy.get(&index) {
+                    self.army_colors
+                        .get(*army_id)
+                        .copied()
+                        .unwrap_or(EMPTY_RGBA)
+                } else {
+                    EMPTY_RGBA
+                };
+                let offset = (px * 4) as usize;
+                self.grid_row[offset..offset + 4].copy_from_slice(&color);
+            }
+
+            let out_y_base = self.next_row * self.cell_pixel_scale;
+            for sy in 0..self.cell_pixel_scale {
+                let out_row_start = ((out_y_base + sy) as usize) * self.row_stride;
+                let out_row = &mut self.out_data[out_row_start..out_row_start + self.row_stride];
+                expand_row_nearest(&self.grid_row, self.width, self.cell_pixel_scale, out_row);
+            }
+
+            self.next_row += 1;
+            processed += 1;
+        }
+        self.next_row >= self.height
+    }
+
+    pub fn encode_png(self) -> std::io::Result<Vec<u8>> {
+        png_bytes_from_rgba(&self.out_data, self.out_w, self.out_h)
+    }
+
+    pub fn write_png(self, path: &Path) -> std::io::Result<()> {
+        let bytes = png_bytes_from_rgba(&self.out_data, self.out_w, self.out_h)?;
+        std::fs::write(path, bytes)
+    }
+}
+
+fn png_bytes_from_rgba(out_data: &[u8], out_w: u32, out_h: u32) -> std::io::Result<Vec<u8>> {
+    use png::{BitDepth, ColorType, Encoder};
+    use std::io::Cursor;
+
+    let mut buf = Vec::new();
+    let mut encoder = Encoder::new(Cursor::new(&mut buf), out_w, out_h);
+    encoder.set_color(ColorType::Rgba);
+    encoder.set_depth(BitDepth::Eight);
+    let mut writer = encoder
+        .write_header()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    writer
+        .write_image_data(out_data)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    writer
+        .finish()
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    Ok(buf)
+}
+
+fn expand_row_nearest(src_row: &[u8], width: u32, scale: u32, out_row: &mut [u8]) {
+    for px in 0..width {
+        let src = (px * 4) as usize;
+        let pixel = &src_row[src..src + 4];
+        for k in 0..scale {
+            let dst = ((px * scale + k) * 4) as usize;
+            out_row[dst..dst + 4].copy_from_slice(pixel);
+        }
+    }
+}
+
+fn raster_board_rgba(
+    def: &GameDefinition,
+    occupancy: &crate::sim::OccupancyGrid,
+    bounds: GridBounds,
+    cell_pixel_scale: u32,
+) -> std::io::Result<RgbaImage> {
+    let cell_pixel_scale = sanitize_cell_pixel_scale(cell_pixel_scale);
     let grid_size = grid_texture_size(bounds);
     let width = grid_size.x;
     let height = grid_size.y;
@@ -385,21 +534,12 @@ pub fn write_board_png(
 
     let out_w = width.saturating_mul(cell_pixel_scale);
     let out_h = height.saturating_mul(cell_pixel_scale);
-    if out_w > MAX_OUTPUT_EDGE_PX || out_h > MAX_OUTPUT_EDGE_PX {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "upscaled board image would exceed size limit",
-        ));
-    }
 
-    let out = if cell_pixel_scale == 1 {
+    Ok(if cell_pixel_scale == 1 {
         img
     } else {
         imageops::resize(&img, out_w, out_h, FilterType::Nearest)
-    };
-    out.save(path)
-        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
-    Ok(())
+    })
 }
 
 fn placement_checksum(placements: &[(u32, ArmyId)]) -> u64 {
