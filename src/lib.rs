@@ -1,3 +1,4 @@
+pub mod bookmark_config;
 pub mod calibration_config;
 pub mod camera;
 pub mod camera_config;

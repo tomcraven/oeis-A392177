@@ -78,11 +78,16 @@ fn apply_zoom_factor(ortho: &mut OrthographicProjection, factor: f32, pan: &PanC
     ortho.scale = (ortho.scale * factor).clamp(pan.min_scale, pan.max_scale);
 }
 
+/// Runs after egui updates [`EguiWantsInput`] so typing in the sidebar does not pan the board.
 pub fn camera_controls(
+    egui_wants: Res<EguiWantsInput>,
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
     mut query: Query<(&mut Transform, &PanCamera, &Projection), With<BoardCamera>>,
 ) {
+    if egui_wants.wants_keyboard_input() {
+        return;
+    }
     let Ok((mut transform, pan, projection)) = query.single_mut() else {
         return;
     };

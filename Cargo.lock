@@ -3871,6 +3871,8 @@ dependencies = [
  "rand",
  "serde",
  "toml",
+ "wasm-bindgen",
+ "web-sys",
 ]
 
 [[package]]

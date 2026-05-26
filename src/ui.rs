@@ -1,7 +1,9 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 
+use crate::bookmark_config::{Bookmark, BookmarkStore};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
+use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
 use crate::CELL_SIZE;
 use crate::model::GameDefinition;
@@ -25,6 +27,8 @@ pub struct UiState {
     pub preset_index: usize,
     /// Piece shown in the nested Advanced editor under Pieces.
     pub edit_army: usize,
+    /// Name for the next bookmark (sidebar Bookmarks section).
+    pub bookmark_new_name: String,
 }
 
 impl Default for UiState {
@@ -36,6 +40,7 @@ impl Default for UiState {
             mutate_all: false,
             preset_index: 0,
             edit_army: 0,
+            bookmark_new_name: String::new(),
         }
     }
 }
@@ -46,11 +51,72 @@ fn apply_preset_index(index: usize) -> GameDefinition {
     (catalog[i].1)()
 }
 
+fn preset_index_for_def(def: &GameDefinition) -> Option<usize> {
+    GameDefinition::preset_catalog()
+        .iter()
+        .enumerate()
+        .find(|(_, (_, factory))| factory().same_applied_state(def))
+        .map(|(i, _)| i)
+}
+
+fn read_camera_session(
+    camera_q: &Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+    window_q: &Query<&Window>,
+    viewport: &ViewportState,
+) -> Option<CameraSessionConfig> {
+    let Ok((transform, projection, pan)) = camera_q.single() else {
+        return None;
+    };
+    let Projection::Orthographic(ortho) = projection else {
+        return None;
+    };
+    let effective_zoom_max = if let Ok(window) = window_q.single() {
+        let safe = viewport::max_safe_zoom_out_scale(ortho, window, viewport.left_inset_px);
+        calibration_config::effective_zoom_out_max(safe, pan.max_scale)
+    } else {
+        calibration_config::MAX_ZOOM_OUT_BUDGET.min(pan.max_scale)
+    };
+    Some(CameraSessionConfig {
+        x: transform.translation.x,
+        y: transform.translation.y,
+        zoom: ortho.scale.clamp(pan.min_scale, effective_zoom_max),
+    })
+}
+
+fn apply_bookmark_camera(
+    camera: CameraSessionConfig,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+) {
+    let Ok((mut transform, mut projection, pan)) = camera_q.single_mut() else {
+        return;
+    };
+    transform.translation.x = camera.x;
+    transform.translation.y = camera.y;
+    if let Projection::Orthographic(ref mut ortho) = *projection {
+        let cap = calibration_config::MAX_ZOOM_OUT_BUDGET.min(pan.max_scale);
+        ortho.scale = camera.zoom.clamp(pan.min_scale, cap);
+    }
+}
+
+fn apply_bookmark(
+    bookmark: &Bookmark,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+    viewport: &mut ViewportState,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+) {
+    *draft = bookmark.to_game_definition();
+    ui_state.preset_index = preset_index_for_def(draft).unwrap_or(ui_state.preset_index);
+    viewport.target_index = bookmark.target_index;
+    apply_bookmark_camera(bookmark.camera, camera_q);
+}
+
 pub fn ui_game_definition(
     mut contexts: EguiContexts,
     mut def: ResMut<GameDefinition>,
     mut sim: ResMut<SimulationBridge>,
     mut ui_state: ResMut<UiState>,
+    mut bookmarks: ResMut<BookmarkStore>,
     mut cache: ResMut<RenderCache>,
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
@@ -155,6 +221,77 @@ pub fn ui_game_definition(
                             }
                             if ui.button("Next ▶").clicked() {
                                 load_preset(idx + 1);
+                            }
+                        });
+                    });
+
+                    ui.collapsing("Bookmarks", |ui| {
+                        let n = bookmarks.bookmarks.len();
+                        if let Some(sel) = bookmarks.selected {
+                            if sel >= n {
+                                bookmarks.selected = None;
+                            }
+                        }
+                        let selected = bookmarks.selected;
+
+                        if n > 0 {
+                            let idx = selected.unwrap_or(0);
+                            let label = bookmarks.bookmarks[idx].name.as_str();
+                            egui::ComboBox::from_id_salt("bookmark_pick")
+                                .selected_text(label)
+                                .show_ui(ui, |ui| {
+                                    let mut pick: Option<usize> = None;
+                                    for (i, bm) in bookmarks.bookmarks.iter().enumerate() {
+                                        if ui
+                                            .selectable_label(selected == Some(i), &bm.name)
+                                            .clicked()
+                                        {
+                                            pick = Some(i);
+                                        }
+                                    }
+                                    if let Some(i) = pick {
+                                        bookmarks.selected = Some(i);
+                                        let bm = bookmarks.bookmarks[i].clone();
+                                        apply_bookmark(
+                                            &bm,
+                                            &mut draft,
+                                            &mut ui_state,
+                                            &mut viewport,
+                                            &mut camera_q,
+                                        );
+                                    }
+                                });
+                            ui.add_space(4.0);
+                        }
+
+                        ui.text_edit_singleline(&mut ui_state.bookmark_new_name);
+
+                        ui.horizontal(|ui| {
+                            let can_delete = selected.is_some() && n > 0;
+                            if ui
+                                .add_enabled(can_delete, egui::Button::new("Delete bookmark"))
+                                .clicked()
+                            {
+                                bookmarks.remove_selected();
+                            }
+                            if ui.button("Add bookmark").clicked() {
+                                let name = if ui_state.bookmark_new_name.trim().is_empty() {
+                                    format!("Bookmark {}", n + 1)
+                                } else {
+                                    ui_state.bookmark_new_name.trim().to_string()
+                                };
+                                ui_state.bookmark_new_name.clear();
+                                if let Some(camera) =
+                                    read_camera_session(&camera_q, &window_q, &viewport)
+                                {
+                                    let bm = Bookmark::capture(
+                                        name,
+                                        &draft,
+                                        camera,
+                                        viewport.target_index,
+                                    );
+                                    bookmarks.add(bm);
+                                }
                             }
                         });
                     });
@@ -572,130 +709,10 @@ pub fn ui_game_definition(
         cache.rendered_bounds = None;
         viewport.bounds = None;
         viewport.target_index = 0;
-        viewport.allow_sim_catchup_immediately();
-        viewport.simulation_pending = false;
         viewport.render_dirty = true;
     }
 
     ui_state.draft = Some(draft);
-}
-
-fn sim_catchup_progress(viewport: &ViewportState, sim: &SimulationBridge) -> Option<f32> {
-    if viewport.is_interactively_moving() {
-        return None;
-    }
-    let target = viewport.target_index;
-    if target == 0 {
-        return Some(0.0);
-    }
-    if !sim.needs_work(target) {
-        return Some(1.0);
-    }
-    let min_cursor = sim
-        .display
-        .cursors
-        .iter()
-        .copied()
-        .min()
-        .unwrap_or(0);
-    Some((min_cursor as f32 / target as f32).clamp(0.0, 1.0))
-}
-
-pub fn sim_catchup_overlay(
-    mut contexts: EguiContexts,
-    viewport: Res<ViewportState>,
-    sim: Res<SimulationBridge>,
-) {
-    if !viewport.simulation_pending {
-        return;
-    }
-    let Ok(ctx) = contexts.ctx_mut() else {
-        return;
-    };
-
-    let screen = ctx.content_rect();
-    let left = viewport.left_inset_px;
-    if left >= screen.width() {
-        return;
-    }
-    let board = egui::Rect::from_min_max(
-        egui::pos2(screen.min.x + left, screen.min.y),
-        screen.max,
-    );
-
-    let progress = sim_catchup_progress(&viewport, &sim);
-    let status = if progress.is_none() {
-        "Preparing simulation…"
-    } else {
-        "Simulating…"
-    };
-
-    const BAR_W: f32 = 240.0;
-    const BAR_H: f32 = 6.0;
-    const PANEL_H: f32 = 40.0;
-    const MARGIN: f32 = 10.0;
-    const H_PAD: f32 = 10.0;
-    let panel_rect = egui::Rect::from_min_max(
-        egui::pos2(
-            board.center().x - BAR_W * 0.5 - H_PAD,
-            board.max.y - PANEL_H - MARGIN,
-        ),
-        egui::pos2(board.center().x + BAR_W * 0.5 + H_PAD, board.max.y - MARGIN),
-    );
-    let bar_rect = egui::Rect::from_min_max(
-        egui::pos2(panel_rect.min.x + H_PAD, panel_rect.max.y - 8.0 - BAR_H),
-        egui::pos2(panel_rect.max.x - H_PAD, panel_rect.max.y - 8.0),
-    );
-
-    egui::Area::new(egui::Id::new("sim_catchup_overlay"))
-        .order(egui::Order::Foreground)
-        .interactable(false)
-        .fixed_pos(panel_rect.min)
-        .show(ctx, |ui| {
-            ui.allocate_exact_size(panel_rect.size(), egui::Sense::empty());
-            let painter = ui.painter();
-            painter.rect_filled(
-                panel_rect,
-                4.0,
-                egui::Color32::from_rgba_unmultiplied(12, 12, 18, 210),
-            );
-            painter.text(
-                egui::pos2(panel_rect.min.x + 10.0, panel_rect.min.y + 6.0),
-                egui::Align2::LEFT_TOP,
-                status,
-                egui::FontId::proportional(12.0),
-                egui::Color32::LIGHT_GRAY,
-            );
-            painter.rect_filled(bar_rect, 3.0, egui::Color32::from_gray(40));
-            match progress {
-                Some(p) => {
-                    let fill = egui::Rect::from_min_max(
-                        bar_rect.min,
-                        egui::pos2(bar_rect.min.x + bar_rect.width() * p, bar_rect.max.y),
-                    );
-                    painter.rect_filled(fill, 3.0, egui::Color32::from_rgb(120, 140, 180));
-                    painter.text(
-                        egui::pos2(panel_rect.max.x - 10.0, panel_rect.min.y + 6.0),
-                        egui::Align2::RIGHT_TOP,
-                        format!("{:.0}%", p * 100.0),
-                        egui::FontId::proportional(12.0),
-                        egui::Color32::GRAY,
-                    );
-                }
-                None => {
-                    let t = ui.input(|i| i.time) as f32;
-                    let pulse = (t * 2.5).sin() * 0.5 + 0.5;
-                    let fill = egui::Rect::from_min_max(
-                        bar_rect.min,
-                        egui::pos2(
-                            bar_rect.min.x + bar_rect.width() * pulse * 0.35,
-                            bar_rect.max.y,
-                        ),
-                    );
-                    painter.rect_filled(fill, 3.0, egui::Color32::from_rgb(120, 140, 180));
-                }
-            }
-        });
 }
 
 fn dedupe_moves(def: &mut GameDefinition) {

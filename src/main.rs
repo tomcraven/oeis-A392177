@@ -15,7 +15,7 @@ use red_black_knights::render::{
     RenderCache, draw_spiral_cells, setup_render_assets, sync_army_materials,
 };
 use red_black_knights::sim_worker::SimulationBridge;
-use red_black_knights::ui::{UiState, sim_catchup_overlay, ui_game_definition};
+use red_black_knights::ui::{UiState, ui_game_definition};
 use red_black_knights::viewport::{
     ViewportState, sync_board_camera_viewport, sync_simulation_to_viewport, WINDOW_HEIGHT,
     WINDOW_WIDTH,
@@ -43,6 +43,7 @@ fn main() {
         .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
         .init_resource::<GameDefinition>()
         .init_resource::<UiState>()
+        .init_resource::<red_black_knights::bookmark_config::BookmarkStore>()
         .init_resource::<RenderCache>()
         .init_resource::<ViewportState>()
         .init_resource::<camera::BoardPointerState>()
@@ -53,6 +54,7 @@ fn main() {
             (
                 disable_egui_auto_primary_context,
                 setup_camera,
+                load_bookmarks,
                 camera::apply_saved_camera_session,
                 setup_sim_worker,
                 setup_render_assets,
@@ -62,7 +64,7 @@ fn main() {
         )
         .add_systems(
             EguiPrimaryContextPass,
-            (ui_game_definition, sim_catchup_overlay).chain(),
+            ui_game_definition,
         )
         .add_systems(
             Update,
@@ -77,7 +79,7 @@ fn main() {
             PostUpdate,
             (
                 sync_board_camera_viewport.before(CameraUpdateSystems),
-                camera_controls,
+                camera_controls.after(write_egui_wants_input_system),
                 camera::camera_zoom_controls.after(write_egui_wants_input_system),
                 camera::camera_pointer_controls.after(write_egui_wants_input_system),
                 camera::persist_camera_session,
@@ -143,4 +145,8 @@ fn setup_camera(mut commands: Commands) {
 
 fn setup_sim_worker(mut commands: Commands, def: Res<GameDefinition>) {
     commands.insert_resource(SimulationBridge::spawn(def.clone()));
+}
+
+fn load_bookmarks(mut bookmarks: ResMut<red_black_knights::bookmark_config::BookmarkStore>) {
+    bookmarks.reload();
 }

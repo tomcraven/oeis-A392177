@@ -70,9 +70,6 @@ pub fn draw_spiral_cells(
     if assets.army_colors.is_empty() {
         return;
     }
-    if viewport.simulation_pending {
-        return;
-    }
     let Some(bounds) = viewport.bounds else {
         return;
     };

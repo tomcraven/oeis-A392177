@@ -23,11 +23,7 @@ pub struct ViewportState {
     pub bounds: Option<GridBounds>,
     pub target_index: u32,
     pub render_dirty: bool,
-    pub simulation_pending: bool,
     pub left_inset_px: f32,
-    /// Frames since visible grid bounds last changed (zoom/pan). Sim catch-up waits until settled.
-    bounds_stable_frames: u32,
-    needs_target_refresh: bool,
 }
 
 impl GridBounds {
@@ -43,21 +39,6 @@ impl GridBounds {
         self.cell_width().max(0) as u64 * self.cell_height().max(0) as u64
     }
 }
-
-impl ViewportState {
-    /// Allow simulation to run immediately after a preset reset (no zoom settle wait).
-    pub fn allow_sim_catchup_immediately(&mut self) {
-        self.bounds_stable_frames = BOUNDS_SETTLE_FRAMES;
-        self.needs_target_refresh = true;
-    }
-
-    pub fn is_interactively_moving(&self) -> bool {
-        self.bounds_stable_frames < BOUNDS_SETTLE_FRAMES
-    }
-}
-
-/// Wait this many frames after bounds stop changing before requesting more simulation.
-pub const BOUNDS_SETTLE_FRAMES: u32 = 4;
 
 pub fn world_to_grid(world: Vec2) -> (i32, i32) {
     let x = (world.x / CELL_SIZE).floor() as i32;
@@ -197,35 +178,16 @@ pub fn sync_simulation_to_viewport(
         viewport.render_dirty = true;
     }
 
-    let bounds_changed = viewport.bounds != Some(bounds);
-    if bounds_changed {
+    if viewport.bounds != Some(bounds) {
         viewport.bounds = Some(bounds);
         viewport.render_dirty = true;
-        viewport.bounds_stable_frames = 0;
-        viewport.needs_target_refresh = true;
-
-        let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
-        if new_target != viewport.target_index {
-            viewport.target_index = new_target;
-            sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
-        }
-    } else {
-        viewport.bounds_stable_frames = viewport.bounds_stable_frames.saturating_add(1);
     }
 
-    let bounds_settled = viewport.bounds_stable_frames >= BOUNDS_SETTLE_FRAMES;
-    if bounds_settled && viewport.needs_target_refresh {
-        let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
-        if new_target != viewport.target_index {
-            viewport.target_index = new_target;
-            sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
-        }
-        viewport.needs_target_refresh = false;
-    }
-    if bounds_settled && sim.needs_work(viewport.target_index) && !sim.is_busy() {
+    let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
+    if new_target != viewport.target_index {
+        viewport.target_index = new_target;
+        sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
+    } else if sim.needs_work(viewport.target_index) && !sim.is_busy() {
         sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
     }
-
-    viewport.simulation_pending =
-        sim.needs_work(viewport.target_index) || sim.is_busy() || !bounds_settled;
 }
