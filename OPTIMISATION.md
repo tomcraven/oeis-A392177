@@ -190,3 +190,105 @@ Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `kni
 - **Toolchain / codegen experiments (out of scope for wasm parity):** `lto = "fat"`, `#[inline(always)]` on hot helpers — not pursued; native-only and not the intended optimisation surface.
 
 **Kept (round 5):** none. `Cargo.toml` release profile remains `lto = "thin"`, `codegen-units = 1`.
+
+## What did not work (2026-05-26 perf pass, round 6)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.691, `knight_3_clique` 2.938, `leaper_4_mixed_clique` 3.299, `king_6_clique` 3.962, `chimera_3_clique` 4.419 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+
+- **`OccupancyGrid` occupied-word bitset for `contains_index`** (mirror `ForbiddenSet` words; no scan skip) — `knight_2_pairwise` within jitter; multi-army medians up (e.g. `leaper_4_mixed_clique` ~3.54 ms, `chimera_3_clique` ~4.56 ms); extra insert work and second vector growth; reverted.
+- **`turn_order_index` via `% turn_order_len`** instead of increment + wrap branch — within jitter / noisy (`knight_2_pairwise` ~2.81 ms); reverted.
+- **Hoist `ForbiddenSet::words` slice in `step_turn_scan`** (direct `get` on slice vs `word_bits`) — mixed across cases, no reliable win vs baseline; reverted.
+- **`contains_index` via `is_some_and`** — within jitter / `knight_2_pairwise` worse (~2.82 ms); reverted.
+
+**Kept (round 6):** none — tree unchanged vs round 5.
+
+## `place()` profiling (2026-05-26)
+
+Harness: `cargo run --release --features place_profile,bevy/dynamic_linking --bin profile_place` (no timing hooks on benchmark paths; counters only during one collection pass).
+
+Method: median of 5× full `step_turn` runs vs 5× **place-only replay** on the same 100k placement stream; subtract for scan estimate. Component microbenches replay captured work on a **fresh** sim (isolated `xy_to_index`, `ForbiddenSet`-style OR, occupancy insert).
+
+**Findings (representative presets, 100k turns, checksums unchanged):**
+
+| Case | step (ms) | place replay (ms) | scan est. (%) | forb OR / place | xy→index / place | occ / place |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | ~4.5 | ~3.1 | ~30% | ~15% | ~48% | ~4% |
+| `knight_3_clique` | ~5.9 | ~4.6 | ~22% | ~47% | ~32% | ~2% |
+| `leaper_4_mixed_clique` | ~7.6 | ~6.5 | ~15% | ~65% | ~23% | ~1% |
+| `king_6_clique` | ~10.6 | ~9.6 | ~10% | ~60% | ~12% | ~1% |
+| `chimera_3_clique` | ~10.5 | ~9.5 | ~8% | ~45% | ~25% | ~1% |
+
+- **Scan is not negligible** on two-army presets (~25–30% of `step_turn` at ~2.7 cells examined per placement); clique presets trend **~8–15%** scan at ~2.4–3.0 cells/placement.
+- **Within `place`, `record_forbidden` dominates** multi-army cliques: forbidden bit OR scales with `moves × threatened_targets` (e.g. 40 inserts/turn for `king_6_clique` = 8 king moves × 5 targets). `xy_to_index` is a large share only when fanout is small (pairwise).
+- **Occupancy `insert` and `placements.push`** are minor vs forbidden fanout (~1–4% in isolation); remaining gap vs summed components is match dispatch, multi-`ForbiddenSet` writes, and cache/TLB on real state (~10–35% of place replay depending on preset).
+- macOS `sample` on release `time_sim` still shows almost all time under `step_turn` (inlined `place` / `record_forbidden` rarely appear as separate frames).
+
+Further `place` wins likely need **fewer forbidden writes** (algorithmic dedup or batching that prior experiments rejected) or **cheaper fanout**, not occupancy or push tuning.
+
+## Forbidden fanout investigation (2026-05-26)
+
+Extended `profile_place` (same harness; enable with `place_profile` feature only) records each `(target_army, index)` insert and classifies `ForbiddenSet::insert` as **existing-word OR** vs **new-word resize**, plus **bit already set** before OR.
+
+### Structural fanout (by design)
+
+- Cost scales **`valid_moves.len() × threatened_targets(attacker)`** per placement (specialized `match` already computes each attacked index once per move).
+- **Cross-target duplication** is exact: e.g. 8 unique attacked cells × 5 targets ⇒ 32 duplicate inserts/placement and **5.00×** fanout multiplier (`king_6_clique`). Not fixable without changing rules or sharing one bitset across armies (breaks per-army scan).
+
+### Insert path over 100k turns
+
+| Case | inserts | existing-word OR | new-word resize | bit already set |
+| --- | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | 800k | 99.6% | 0.4% | **~85%** |
+| `king_6_clique` | 4M | 99.8% | 0.2% | **~86%** |
+| `chimera_3_clique` | 3.2M | 99.9% | 0.1% | **~93%** |
+
+- **`resize` is not the problem** late in a run; almost all work is OR into existing words.
+- **~85–93% of ORs touch a bit that is already 1** (overlap from earlier placements re-marking the same attacked cells). CPU still does the OR; an idempotent skip would avoid memory writes but **`ForbiddenSet::insert` skip-if-set regressed medians** in round 2 (branch cost).
+
+### Multi-army vs single bitset (isolated replay)
+
+Replaying the captured insert stream into **one** harness bitset vs **one per army** (sim layout):
+
+- **`king_6_clique`**: one set ~6.3 ms vs six sets ~2.8 ms — scattering across smaller per-army vectors can be **cheaper** than one monolithic bitset for the same insert stream (cache / working-set size).
+- **`knight_2_pairwise`**: two sets ~61% slower than one set at equal insert count — low army count favors unified working set.
+
+Real `place` still pays **`record_forbidden` dispatch**, `xy_to_index`, and sequential `forbidden[target]` indexing on top of raw OR cost.
+
+### Likely optimization directions (evidence-backed)
+
+1. **Do not chase word growth** — negligible after warm-up.
+2. **Idempotent insert** — high redundant-bit rate suggests *possible* win, but prior A/B failed; any retry needs branchless or “likely already set” profiling (late-game conditioned).
+3. **Reduce fanout only via semantics** — fewer threatened targets or merged forbidden storage (major sim change).
+4. **Same-move batching across targets** — already shares `attacked`; further reduction means **one write propagates to all targets** (e.g. shared layer + per-army view), not more micro-OR tricks.
+5. Rejected in tree and still aligned with data: **parallel fanout**, **batched stack inserts**, **same-word batched OR** (round 4).
+
+## What did not work (2026-05-26 perf pass, round 7 — profile-guided)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 3.303, `knight_3_clique` 4.113, `leaper_4_mixed_clique` 5.006, `king_6_clique` 7.272, `chimera_3_clique` 6.935 ms. Checksums unchanged; `cargo testd` passed.
+
+- **Skip forbidden OR when bit already set** (fanout survey showed ~85–93% redundant touches) — medians up on pairwise/leaper (e.g. `knight_2_pairwise` ~3.47 ms); branch cost outweighs skipped stores; reverted (same class as round-2 idempotent insert).
+- **`xy_to_index` lookup table** (`R=448`, ~3.2 MiB static, load vs formula) — all bench medians regressed (e.g. `chimera_3_clique` ~7.46 ms); reverted.
+
+**Kept (round 7):** `ForbiddenSet::insert` only loads the word to test “already set” when built with **`place_profile`** (profiling counters). Default/release builds no longer do that extra read on every insert.
+
+## Shared forbidden representation — attack layers (2026-05-26, kept)
+
+**Idea:** Store one cumulative `ForbiddenSet` per **attacker** (`attack_layers[a]`) instead of fanning each attacked cell into every defender’s bitset on `place`. On scan, army `d` ORs `attack_layers[a].word(w)` for each attacker `a` that `d` respects (`blocked_by`).
+
+Semantically `forbidden[d]` equals `⋁_{a ∈ respected(d)} attack_layers[a]`; golden checksums unchanged.
+
+**Place:** `moves` inserts per turn (not `moves × targets`). **Scan:** up to `|respected(d)|` word loads + ORs per examined cell (specialized for 1–5 attackers).
+
+**`time_sim` medians** (`TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`) before layers vs after:
+
+| Case | before (round 7) | after layers | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 3.170 | **2.910** | −8% |
+| `knight_3_clique` | 4.210 | **2.755** | −35% |
+| `leaper_4_mixed_clique` | 5.076 | **2.770** | −45% |
+| `king_6_clique` | 7.260 | **2.856** | −61% |
+| `chimera_3_clique` | 6.990 | **4.030** | −42% |
+
+Confirming run medians after layers: 2.910 / 2.755 / 2.770 / 2.856 / 4.030 ms.
+
+Harness: `cargo rund --release --bin time_sim`; `profile_place` insert counts are now per-layer (see `inserts_per_placement = moves`).

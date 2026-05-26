@@ -20,9 +20,10 @@ pub struct Simulation {
     /// Dense by spiral index because simulation placement scans are numeric and monotonic.
     /// This avoids hashing on every occupied-cell check in the hot loop.
     pub occupancy: OccupancyGrid,
-    /// Per-army attacked cells by armies this army respects.
-    forbidden: Vec<ForbiddenSet>,
-    threatened_for: Vec<Vec<ArmyId>>,
+    /// Cumulative attacked cells from each army's placements (one bitset per attacker).
+    attack_layers: Vec<ForbiddenSet>,
+    /// For each defender army, attackers whose `attack_layers` are OR'd during its scan.
+    respected_attackers: Vec<Vec<ArmyId>>,
     pub cursors: Vec<u32>,
     cursor_positions: Vec<(i32, i32)>,
     /// Rolling cursor into `turn_order`; avoids a modulo in every simulated turn.
@@ -35,8 +36,8 @@ impl Simulation {
     pub fn new(def: &GameDefinition) -> Self {
         Self {
             occupancy: OccupancyGrid::new(),
-            forbidden: vec![ForbiddenSet::default(); def.armies.len()],
-            threatened_for: threatened_for(def),
+            attack_layers: vec![ForbiddenSet::default(); def.armies.len()],
+            respected_attackers: respected_attackers(def),
             cursors: vec![0; def.armies.len()],
             cursor_positions: vec![(0, 0); def.armies.len()],
             turn_order_index: 0,
@@ -48,14 +49,14 @@ impl Simulation {
     pub fn reset(&mut self, def: &GameDefinition) {
         self.occupancy.clear();
         let army_count = def.armies.len();
-        if self.forbidden.len() == army_count {
-            for set in &mut self.forbidden {
+        if self.attack_layers.len() == army_count {
+            for set in &mut self.attack_layers {
                 set.clear();
             }
         } else {
-            self.forbidden = vec![ForbiddenSet::default(); army_count];
+            self.attack_layers = vec![ForbiddenSet::default(); army_count];
         }
-        self.threatened_for = threatened_for(def);
+        self.respected_attackers = respected_attackers(def);
         resize_army_vectors(&mut self.cursors, army_count, 0);
         resize_army_vectors(&mut self.cursor_positions, army_count, (0, 0));
         self.turn_order_index = 0;
@@ -64,72 +65,76 @@ impl Simulation {
     }
 
     fn place(&mut self, def: &GameDefinition, index: u32, xy: (i32, i32), army_id: ArmyId) {
-        self.occupancy.insert(index, army_id);
-        self.record_forbidden(def, xy, army_id);
-        self.placements.push((index, army_id));
+        #[cfg(feature = "place_profile")]
+        if crate::place_profile::profiling_active() {
+            let moves = def.army(army_id).piece.valid_moves.len() as u64;
+            crate::place_profile::note_placement_work(moves, 1);
+            let place_start = crate::place_profile::timing_enabled_for_place()
+                .then(Instant::now);
+            crate::place_profile::time_occupancy_insert(|| {
+                self.occupancy.insert(index, army_id);
+            });
+            crate::place_profile::time_record_forbidden(|| {
+                self.record_forbidden(def, xy, army_id);
+            });
+            crate::place_profile::time_placements_push(|| {
+                self.placements.push((index, army_id));
+            });
+            if let Some(place_start) = place_start {
+                crate::place_profile::add_place_total_ns(place_start.elapsed().as_nanos() as u64);
+            }
+        } else {
+            self.occupancy.insert(index, army_id);
+            self.record_forbidden(def, xy, army_id);
+            self.placements.push((index, army_id));
+        }
+        #[cfg(not(feature = "place_profile"))]
+        {
+            self.occupancy.insert(index, army_id);
+            self.record_forbidden(def, xy, army_id);
+            self.placements.push((index, army_id));
+        }
     }
 
     fn record_forbidden(&mut self, def: &GameDefinition, xy: (i32, i32), army_id: ArmyId) {
         let moves = &def.army(army_id).piece.valid_moves;
-        let targets = &self.threatened_for[army_id];
         let (x, y) = xy;
-        // Most presets fan out to 1-5 target armies. Specializing those sizes avoids
-        // re-running xy_to_index per target and removes the tiny inner iterator overhead.
-        match targets[..] {
-            [] => {}
-            [target_army] => {
-                for &(dx, dy) in moves {
-                    self.forbidden[target_army].insert(xy_to_index(x + dx, y + dy));
-                }
+        for &(dx, dy) in moves {
+            let attacked = xy_to_index(x + dx, y + dy);
+            #[cfg(feature = "place_profile")]
+            if crate::place_profile::profiling_active() {
+                crate::place_profile::push_forbidden_record(army_id, attacked);
             }
-            [first, second] => {
-                for &(dx, dy) in moves {
-                    let attacked = xy_to_index(x + dx, y + dy);
-                    self.forbidden[first].insert(attacked);
-                    self.forbidden[second].insert(attacked);
-                }
-            }
-            [first, second, third] => {
-                for &(dx, dy) in moves {
-                    let attacked = xy_to_index(x + dx, y + dy);
-                    self.forbidden[first].insert(attacked);
-                    self.forbidden[second].insert(attacked);
-                    self.forbidden[third].insert(attacked);
-                }
-            }
-            [first, second, third, fourth] => {
-                for &(dx, dy) in moves {
-                    let attacked = xy_to_index(x + dx, y + dy);
-                    self.forbidden[first].insert(attacked);
-                    self.forbidden[second].insert(attacked);
-                    self.forbidden[third].insert(attacked);
-                    self.forbidden[fourth].insert(attacked);
-                }
-            }
-            [first, second, third, fourth, fifth] => {
-                for &(dx, dy) in moves {
-                    let attacked = xy_to_index(x + dx, y + dy);
-                    self.forbidden[first].insert(attacked);
-                    self.forbidden[second].insert(attacked);
-                    self.forbidden[third].insert(attacked);
-                    self.forbidden[fourth].insert(attacked);
-                    self.forbidden[fifth].insert(attacked);
-                }
-            }
-            _ => {
-                for &(dx, dy) in moves {
-                    let attacked = xy_to_index(x + dx, y + dy);
-                    for &target_army in targets {
-                        self.forbidden[target_army].insert(attacked);
-                    }
-                }
-            }
+            self.attack_layers[army_id].insert(attacked);
         }
     }
 
     /// One army takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
         self.step_turn_scan::<false>(def, &mut 0)
+    }
+
+    /// Like `step_turn`, but accumulates scan/place timings (requires feature `place_profile`).
+    #[cfg(feature = "place_profile")]
+    pub fn step_turn_profiled(&mut self, def: &GameDefinition) -> bool {
+        crate::place_profile::time_step_turn(|| {
+            let mut cells = 0u32;
+            let ok = self.step_turn_scan::<true>(def, &mut cells);
+            crate::place_profile::add_scan_cells(cells as u64);
+            ok
+        })
+    }
+
+    /// Re-run `place` for profiling replays (requires feature `place_profile`).
+    #[cfg(feature = "place_profile")]
+    pub fn replay_place_profiled(
+        &mut self,
+        def: &GameDefinition,
+        index: u32,
+        xy: (i32, i32),
+        army_id: ArmyId,
+    ) {
+        self.place(def, index, xy, army_id);
     }
 
     fn step_turn_scan<const COUNT_CELLS: bool>(
@@ -149,11 +154,13 @@ impl Simulation {
         self.turn_step += 1;
 
         let occupancy = &self.occupancy;
-        let forbidden = &self.forbidden[army_id];
+        let attack_layers = &self.attack_layers;
+        let respected = &self.respected_attackers[army_id];
         // Locals avoid re-indexing `cursors`/`cursor_positions` on every scanned cell.
         let mut cursor = self.cursors[army_id];
         let mut xy = self.cursor_positions[army_id];
-        let mut forb_word = forbidden.word_bits(cursor as usize >> 6);
+        let mut forb_word =
+            combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
 
         loop {
             if COUNT_CELLS {
@@ -189,7 +196,8 @@ impl Simulation {
                         self.cursor_positions[army_id] = xy;
                         return false;
                     }
-                    forb_word = forbidden.word_bits(cursor as usize >> 6);
+                    forb_word =
+                        combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
                     continue;
                 }
             }
@@ -204,7 +212,8 @@ impl Simulation {
             }
 
             if (cursor & 63) == 0 {
-                forb_word = forbidden.word_bits(cursor as usize >> 6);
+                forb_word =
+                    combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
             }
         }
     }
@@ -274,6 +283,8 @@ impl OccupancyGrid {
     fn insert(&mut self, index: u32, army_id: ArmyId) {
         let index = index as usize;
         if index >= self.cells.len() {
+            #[cfg(feature = "place_profile")]
+            crate::place_profile::note_occupancy_grow();
             self.cells.resize(index + 1, EMPTY_ARMY);
         }
         self.cells[index] = army_id;
@@ -307,8 +318,15 @@ impl ForbiddenSet {
         let word_index = index as usize >> 6;
         let bit = 1u64 << (index & 63);
         if word_index < self.words.len() {
+            #[cfg(feature = "place_profile")]
+            {
+                let already_set = self.words[word_index] & bit != 0;
+                crate::place_profile::note_forbidden_or_existing_word(already_set);
+            }
             self.words[word_index] |= bit;
         } else {
+            #[cfg(feature = "place_profile")]
+            crate::place_profile::note_forbidden_or_new_word();
             self.words.resize(word_index + 1, 0);
             self.words[word_index] |= bit;
         }
@@ -358,6 +376,53 @@ fn range_bits_all_set(word_bits: impl Fn(usize) -> u64, from: u32, to: u32) -> b
     true
 }
 
+fn respected_attackers(def: &GameDefinition) -> Vec<Vec<ArmyId>> {
+    let army_count = def.armies.len();
+    let mut respected = vec![Vec::new(); army_count];
+    for defender in 0..army_count {
+        for attacker in 0..army_count {
+            if def.army(defender).blocked_by.contains(&attacker) {
+                respected[defender].push(attacker);
+            }
+        }
+    }
+    respected
+}
+
+fn combined_forbidden_word(
+    layers: &[ForbiddenSet],
+    respected: &[ArmyId],
+    word_index: usize,
+) -> u64 {
+    match respected {
+        [] => 0,
+        [a] => layers[*a].word_bits(word_index),
+        [a, b] => layers[*a].word_bits(word_index) | layers[*b].word_bits(word_index),
+        [a, b, c] => {
+            layers[*a].word_bits(word_index)
+                | layers[*b].word_bits(word_index)
+                | layers[*c].word_bits(word_index)
+        }
+        [a, b, c, d] => {
+            layers[*a].word_bits(word_index)
+                | layers[*b].word_bits(word_index)
+                | layers[*c].word_bits(word_index)
+                | layers[*d].word_bits(word_index)
+        }
+        [a, b, c, d, e] => {
+            layers[*a].word_bits(word_index)
+                | layers[*b].word_bits(word_index)
+                | layers[*c].word_bits(word_index)
+                | layers[*d].word_bits(word_index)
+                | layers[*e].word_bits(word_index)
+        }
+        _ => respected
+            .iter()
+            .fold(0u64, |acc, &a| acc | layers[a].word_bits(word_index)),
+    }
+}
+
+#[cfg(test)]
 fn threatened_for(def: &GameDefinition) -> Vec<Vec<ArmyId>> {
     let mut threatened_for = vec![Vec::new(); def.armies.len()];
     for target_army in 0..def.armies.len() {
@@ -655,7 +720,11 @@ mod tests {
     }
 
     fn backing_capacities(sim: &Simulation) -> (usize, usize, usize) {
-        let forb: usize = sim.forbidden.iter().map(|f| f.words.capacity()).sum();
+        let forb: usize = sim
+            .attack_layers
+            .iter()
+            .map(|f| f.words.capacity())
+            .sum();
         (sim.occupancy.cells.capacity(), sim.placements.capacity(), forb)
     }
 
@@ -730,12 +799,12 @@ mod tests {
         let red_xy = sim.cursor_positions[1];
         for &(dx, dy) in &def.armies[1].piece.valid_moves {
             let attacked = xy_to_index(red_xy.0 + dx, red_xy.1 + dy);
-            assert!(sim.forbidden[0].contains_index(attacked));
+            assert!(sim.attack_layers[1].contains_index(attacked));
         }
 
         let black_xy = (0, 0);
         let attacked = xy_to_index(black_xy.0 + 1, black_xy.1 + 2);
-        assert!(sim.forbidden[1].contains_index(attacked));
+        assert!(sim.attack_layers[0].contains_index(attacked));
         assert!(sim.occupancy.contains_index(0));
         assert!(sim.occupancy.contains_index(1));
     }

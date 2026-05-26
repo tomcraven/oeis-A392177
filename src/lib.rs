@@ -6,6 +6,8 @@ pub mod camera_config;
 pub mod discover;
 pub mod discover_catalog;
 pub mod game_snapshot;
+#[cfg(feature = "place_profile")]
+pub mod place_profile;
 pub mod model;
 pub mod mutate;
 pub mod random_gen;
