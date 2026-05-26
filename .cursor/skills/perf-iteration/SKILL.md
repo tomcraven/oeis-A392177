@@ -34,6 +34,8 @@ Run timing in release mode only:
 cargo rund --release --bin time_sim
 ```
 
+Optional env vars: `TIME_SIM_ITERS` (default 15), `TIME_SIM_WARMUP` (default 2). Output includes mean, median, and stdev milliseconds per case.
+
 If the timing harness does not exist yet, add a small binary at `src/bin/time_sim.rs` that:
 
 - Uses `std::time::Instant`.

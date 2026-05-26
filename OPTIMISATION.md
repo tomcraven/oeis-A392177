@@ -5,7 +5,7 @@ Simulation performance work verified with the release timing harness. Rendering 
 ## Guardrails
 
 - Correctness: `cargo test --features bevy/dynamic_linking`
-- Timing: `cargo run --release --features bevy/dynamic_linking --bin time_sim`
+- Timing: `cargo run --release --features bevy/dynamic_linking --bin time_sim` (optional `TIME_SIM_ITERS`, `TIME_SIM_WARMUP`; reports mean/median/stdev)
 - Checksums on all representative presets must stay unchanged.
 
 ## Cherry-picked from stash (sim / viewport / spiral only)
@@ -21,6 +21,7 @@ These changes are in the tree; they do **not** alter board zoom visuals:
 - **Forbidden-word scan skip** — when every remaining index in the current `u64` forbidden word is set, advance the cursor to the next word with `index_to_xy` instead of repeated `spiral_step`.
 - **Local cursor/`xy` in `step_turn`** — scan loop mutates locals and writes `cursors`/`cursor_positions` only on placement or failure (fewer repeated vector index ops in the hot loop).
 - **`range_bits_all_set`** — shared helper for forbidden word-tail tests (same bit logic as before, single implementation).
+- **Scan loop word cache (2026-05-26)** — cache active forbidden `u64` across `spiral_step` advances within a word; inline same-word tail skip (no closure); `get`-style membership checks; drop unreachable `word_end == 0` branch.
 
 ## Left in stash (changes visuals or GPU risk)
 
@@ -41,6 +42,16 @@ Session baseline (forbidden-word skip only, start of perf pass) vs **2026-05-25 
 
 Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'` helps some presets and hurts others on Apple Silicon; not enabled in-repo.
 
+**2026-05-26 scan word-cache A/B** (`TIME_SIM_WARMUP=2`, `TIME_SIM_ITERS=20`, three harness passes; compare avg of per-pass `median_ms` vs prior `step_turn` on `HEAD`). Checksums unchanged.
+
+| Case | before avg median | after avg median | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.875 | **2.703** | −6.0% |
+| `knight_3_clique` | 3.111 | **2.988** | −4.0% |
+| `leaper_4_mixed_clique` | 3.614 | **3.401** | −5.9% |
+| `guard_6_clique` | 4.312 | **3.989** | −7.5% |
+| `chimera_3_clique` | 4.812 | **4.585** | −4.7% |
+
 ## What did not work (earlier experiments)
 
 - Caching move sets inside `Simulation` — noisy regressions on multi-army presets.
@@ -59,6 +70,17 @@ Expect ~5–15% jitter on `best_ms`. Optional `RUSTFLAGS='-C target-cpu=native'`
 - **Occupancy bitset + O(1) occupied-word skip** (including short-circuit after forbidden check, and `(occ|forb)` combined mask) — regressed medians vs forbidden-only skip; extra bit work on most rejections outweighs extra jumps.
 - **`placements` `with_capacity(131_072)`** — noisy, no consistent win in A/B (reverted).
 - **`target-cpu=native`** — mixed across presets (reverted from repo config).
+
+## What did not work (threading, 2026-05-26)
+
+- **Parallel forbidden fanout** (rayon / scoped writes into disjoint `ForbiddenSet`s) — does not apply to the five bench presets (they use the specialized 1–5 target paths); on 7+ army generic fanout the spawn overhead dominates tiny bitset inserts. Unified fanout without threads also regressed vs specialized `match` arms.
+- **Parallel benchmark cases** in `time_sim` — only speeds the harness, not the sim; removed.
+- **Turn-level parallelism** — each `step_turn` depends on global occupancy/forbidden state and must pick the first legal spiral index in order; not safely splittable without a different algorithm.
+
+## What did not work (SIMD / SWAR batching, 2026-05-26)
+
+- **64-bit word batch scan in `step_turn`** — OR forbidden + occupancy masks in a u64 tail, use `trailing_ones` to skip blocked runs and jump with `index_to_xy`. Correct (checksums unchanged) but medians matched baseline within jitter; extra bitset maintenance on `OccupancyGrid` and tail work on most rejections did not pay off. Aligns with earlier failed combined-mask / occupancy-skip attempts in this file.
+- **True SIMD intrinsics** — hot path is already u64 lane logic; `xy_to_index` / `spiral_step` are branchy and not batch-friendly. No separate intrinsic pass tried after SWAR showed no win.
 
 ## Future work
 

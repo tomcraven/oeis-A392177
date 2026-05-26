@@ -57,25 +57,26 @@ impl Simulation {
     fn record_forbidden(&mut self, def: &GameDefinition, xy: (i32, i32), army_id: ArmyId) {
         let moves = &def.army(army_id).piece.valid_moves;
         let targets = &self.threatened_for[army_id];
+        let (x, y) = xy;
         // Most presets fan out to 1-5 target armies. Specializing those sizes avoids
         // re-running xy_to_index per target and removes the tiny inner iterator overhead.
         match targets[..] {
             [] => {}
             [target_army] => {
                 for &(dx, dy) in moves {
-                    self.forbidden[target_army].insert(xy_to_index(xy.0 + dx, xy.1 + dy));
+                    self.forbidden[target_army].insert(xy_to_index(x + dx, y + dy));
                 }
             }
             [first, second] => {
                 for &(dx, dy) in moves {
-                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    let attacked = xy_to_index(x + dx, y + dy);
                     self.forbidden[first].insert(attacked);
                     self.forbidden[second].insert(attacked);
                 }
             }
             [first, second, third] => {
                 for &(dx, dy) in moves {
-                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    let attacked = xy_to_index(x + dx, y + dy);
                     self.forbidden[first].insert(attacked);
                     self.forbidden[second].insert(attacked);
                     self.forbidden[third].insert(attacked);
@@ -83,7 +84,7 @@ impl Simulation {
             }
             [first, second, third, fourth] => {
                 for &(dx, dy) in moves {
-                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    let attacked = xy_to_index(x + dx, y + dy);
                     self.forbidden[first].insert(attacked);
                     self.forbidden[second].insert(attacked);
                     self.forbidden[third].insert(attacked);
@@ -92,7 +93,7 @@ impl Simulation {
             }
             [first, second, third, fourth, fifth] => {
                 for &(dx, dy) in moves {
-                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    let attacked = xy_to_index(x + dx, y + dy);
                     self.forbidden[first].insert(attacked);
                     self.forbidden[second].insert(attacked);
                     self.forbidden[third].insert(attacked);
@@ -102,7 +103,7 @@ impl Simulation {
             }
             _ => {
                 for &(dx, dy) in moves {
-                    let attacked = xy_to_index(xy.0 + dx, xy.1 + dy);
+                    let attacked = xy_to_index(x + dx, y + dy);
                     for &target_army in targets {
                         self.forbidden[target_army].insert(attacked);
                     }
@@ -129,9 +130,13 @@ impl Simulation {
         // Locals avoid re-indexing `cursors`/`cursor_positions` on every scanned cell.
         let mut cursor = self.cursors[army_id];
         let mut xy = self.cursor_positions[army_id];
+        let mut forb_word = forbidden.word_bits(cursor as usize >> 6);
 
         loop {
-            if !occupancy.contains_index(cursor) && !forbidden.contains_index(cursor) {
+            let bit = 1u64 << (cursor & 63);
+            let occupied = occupancy.contains_index(cursor);
+            let forbidden_here = forb_word & bit != 0;
+            if !occupied && !forbidden_here {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
                 self.place(def, cursor, xy, army_id);
@@ -146,20 +151,21 @@ impl Simulation {
             }
 
             let word_end = ((cursor >> 6) + 1) << 6;
-            if next < word_end && forbidden.forbidden_bits_all_set(next, word_end) {
-                if word_end == 0 {
-                    self.cursors[army_id] = cursor;
-                    self.cursor_positions[army_id] = xy;
-                    return false;
+            if next < word_end {
+                let shift = next & 63;
+                let len = word_end - next;
+                let tail_mask = (1u64 << len) - 1;
+                if ((forb_word >> shift) & tail_mask) == tail_mask {
+                    cursor = word_end;
+                    xy = index_to_xy(word_end);
+                    if cursor == u32::MAX {
+                        self.cursors[army_id] = cursor;
+                        self.cursor_positions[army_id] = xy;
+                        return false;
+                    }
+                    forb_word = forbidden.word_bits(cursor as usize >> 6);
+                    continue;
                 }
-                cursor = word_end;
-                xy = index_to_xy(word_end);
-                if cursor == u32::MAX {
-                    self.cursors[army_id] = cursor;
-                    self.cursor_positions[army_id] = xy;
-                    return false;
-                }
-                continue;
             }
 
             cursor = next;
@@ -169,6 +175,10 @@ impl Simulation {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
                 return false;
+            }
+
+            if (cursor & 63) == 0 {
+                forb_word = forbidden.word_bits(cursor as usize >> 6);
             }
         }
     }
@@ -236,8 +246,11 @@ impl OccupancyGrid {
     }
 
     fn contains_index(&self, index: u32) -> bool {
-        let index = index as usize;
-        index < self.cells.len() && self.cells[index] != EMPTY_ARMY
+        self.cells
+            .get(index as usize)
+            .copied()
+            .unwrap_or(EMPTY_ARMY)
+            != EMPTY_ARMY
     }
 }
 
@@ -259,9 +272,15 @@ impl ForbiddenSet {
         self.words[word_index] |= 1u64 << (index & 63);
     }
 
+    #[cfg(test)]
     fn contains_index(&self, index: u32) -> bool {
-        let word_index = index as usize >> 6;
-        word_index < self.words.len() && self.words[word_index] & (1u64 << (index & 63)) != 0
+        let bit = 1u64 << (index & 63);
+        self.words
+            .get(index as usize >> 6)
+            .copied()
+            .unwrap_or(0)
+            & bit
+            != 0
     }
 
     fn word_bits(&self, word_index: usize) -> u64 {
@@ -269,11 +288,13 @@ impl ForbiddenSet {
     }
 
     /// Every index in `[from, to)` has its forbidden bit set.
+    #[cfg(test)]
     fn forbidden_bits_all_set(&self, from: u32, to: u32) -> bool {
         range_bits_all_set(|word_index| self.word_bits(word_index), from, to)
     }
 }
 
+#[cfg(test)]
 fn range_bits_all_set(word_bits: impl Fn(usize) -> u64, from: u32, to: u32) -> bool {
     debug_assert!(from < to);
     let mut index = from;

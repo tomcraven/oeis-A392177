@@ -51,7 +51,7 @@ pub fn xy_to_index(x: i32, y: i32) -> u32 {
 }
 
 pub fn spiral_step((x, y): (i32, i32)) -> (i32, i32) {
-    if (x, y) == (0, 0) {
+    if x == 0 && y == 0 {
         return (1, 0);
     }
     let w = x.abs().max(y.abs());
