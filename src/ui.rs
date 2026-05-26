@@ -1,5 +1,6 @@
 use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
+use serde::{Deserialize, Serialize};
 
 use crate::bookmark_config::{Bookmark, BookmarkStore};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
@@ -16,6 +17,31 @@ use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
+
+/// Open/closed state for sidebar [`egui::CollapsingHeader`] sections (persisted in app session).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct SidebarSections {
+    #[serde(default)]
+    pub view: bool,
+    #[serde(default)]
+    pub presets: bool,
+    #[serde(default)]
+    pub bookmarks: bool,
+    #[serde(default)]
+    pub random_generator: bool,
+    #[serde(default)]
+    pub mutate: bool,
+    #[serde(default)]
+    pub pieces: bool,
+    #[serde(default)]
+    pub pieces_summary: bool,
+    #[serde(default)]
+    pub edit_roster: bool,
+    #[serde(default)]
+    pub pieces_advanced: bool,
+    #[serde(default)]
+    pub debug: bool,
+}
 
 #[derive(Resource)]
 pub struct UiState {
@@ -35,6 +61,7 @@ pub struct UiState {
     pub roster_remove_army: usize,
     /// Colour applied when adding a piece from Edit roster.
     pub add_piece_color: Color,
+    pub sidebar: SidebarSections,
 }
 
 impl Default for UiState {
@@ -50,8 +77,26 @@ impl Default for UiState {
             add_piece_preset_index: 0,
             roster_remove_army: 0,
             add_piece_color: GameDefinition::default_army_color(0),
+            sidebar: SidebarSections::default(),
         }
     }
+}
+
+fn sidebar_collapsing(
+    ui: &mut egui::Ui,
+    section_id: &str,
+    title: &str,
+    open: bool,
+    force_open: bool,
+    body: impl FnOnce(&mut egui::Ui),
+) -> bool {
+    let want_open = force_open || open;
+    let response = egui::CollapsingHeader::new(title)
+        .id_salt(egui::Id::new(section_id))
+        .default_open(want_open)
+        .open(if force_open { Some(true) } else { None })
+        .show(ui, body);
+    force_open || response.body_returned.is_some()
 }
 
 fn apply_preset_index(index: usize) -> GameDefinition {
@@ -147,7 +192,7 @@ pub fn ui_game_definition(
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.heading("Red & Black Knights");
-                    ui.collapsing("View", |ui| {
+                    ui_state.sidebar.view = sidebar_collapsing(ui, "view", "View", ui_state.sidebar.view, false, |ui| {
                         if ui.button("Center view").clicked() {
                             camera_actions.center_view = true;
                         }
@@ -204,37 +249,13 @@ pub fn ui_game_definition(
                             }
                         }
                     });
-                    ui.collapsing("Presets", |ui| {
-                        let catalog = GameDefinition::preset_catalog();
-                        let n = catalog.len().max(1);
-                        if ui_state.preset_index >= n {
-                            ui_state.preset_index = 0;
-                        }
-                        let idx = ui_state.preset_index;
-                        let mut load_preset = |new_idx: usize| {
-                            ui_state.preset_index = new_idx % n;
-                            draft = apply_preset_index(ui_state.preset_index);
-                        };
-                        egui::ComboBox::from_id_salt("preset_pick")
-                            .selected_text(catalog[idx].0)
-                            .show_ui(ui, |ui| {
-                                for (i, (label, _)) in catalog.iter().enumerate() {
-                                    if ui.selectable_label(idx == i, *label).clicked() {
-                                        load_preset(i);
-                                    }
-                                }
-                            });
-                        ui.horizontal(|ui| {
-                            if ui.button("◀ Previous").clicked() {
-                                load_preset(idx + n - 1);
-                            }
-                            if ui.button("Next ▶").clicked() {
-                                load_preset(idx + 1);
-                            }
-                        });
-                    });
-
-                    ui.collapsing("Bookmarks", |ui| {
+                    ui_state.sidebar.bookmarks = sidebar_collapsing(
+                        ui,
+                        "bookmarks",
+                        "Bookmarks",
+                        ui_state.sidebar.bookmarks,
+                        false,
+                        |ui| {
                         let n = bookmarks.bookmarks.len();
                         if let Some(sel) = bookmarks.selected {
                             if sel >= n {
@@ -305,7 +326,13 @@ pub fn ui_game_definition(
                         });
                     });
 
-                    ui.collapsing("Random generator", |ui| {
+                    ui_state.sidebar.random_generator = sidebar_collapsing(
+                        ui,
+                        "random_generator",
+                        "Random generator",
+                        ui_state.sidebar.random_generator,
+                        false,
+                        |ui| {
                         let rg = &mut ui_state.random_gen;
                         ui.scope(|ui| {
                             sidebar_u32_range(
@@ -368,7 +395,13 @@ pub fn ui_game_definition(
                         });
                     });
 
-                    ui.collapsing("Mutate", |ui| {
+                    ui_state.sidebar.mutate = sidebar_collapsing(
+                        ui,
+                        "mutate",
+                        "Mutate",
+                        ui_state.sidebar.mutate,
+                        false,
+                        |ui| {
                         if draft.armies.is_empty() {
                             ui.label("No pieces");
                         } else {
@@ -528,79 +561,137 @@ pub fn ui_game_definition(
                         }
                     });
 
-                    ui.collapsing("Pieces", |ui| {
-                        let mut open_advanced = false;
-                        if !draft.armies.is_empty() {
-                            let advanced_id = ui.make_persistent_id("pieces_advanced");
-                            let advanced_was_open =
-                                egui::collapsing_header::CollapsingState::load_with_default_open(
-                                    ui.ctx(),
-                                    advanced_id,
-                                    false,
-                                )
-                                .is_open();
-                            let row_h = draft
-                                .armies
-                                .iter()
-                                .map(|a| summary_preview_side_px(&a.piece.valid_moves))
-                                .fold(0.0_f32, f32::max);
-                            egui::ScrollArea::horizontal()
-                                .min_scrolled_height(0.0)
-                                .max_height(row_h)
-                                .show(ui, |ui| {
-                                    ui.horizontal_top(|ui| {
-                                        ui.spacing_mut().item_spacing =
-                                            egui::vec2(2.0, 0.0);
-                                        for (army_idx, army) in draft.armies.iter().enumerate() {
-                                            let blocked: Vec<_> = army
-                                                .blocked_by
-                                                .iter()
-                                                .filter_map(|&id| {
-                                                    draft.armies.get(id).map(|a| a.name.as_str())
-                                                })
-                                                .collect();
-                                            let blocked_line = if blocked.is_empty() {
-                                                "blocked by: —".to_string()
-                                            } else {
-                                                format!("blocked by: {}", blocked.join(", "))
-                                            };
-                                            let hover = format!(
-                                                "{army_idx}: {}\n{blocked_line}\nClick to edit",
-                                                army.name
-                                            );
-                                            let selected = army_idx == ui_state.edit_army
-                                                && (advanced_was_open || open_advanced);
-
-                                            let preview = move_grid_preview_ui(
-                                                ui,
-                                                army_idx,
-                                                &army.piece.valid_moves,
-                                                army.color,
-                                                selected,
-                                            )
-                                            .on_hover_text(hover);
-
-                                            if preview.clicked() {
-                                                ui_state.edit_army = army_idx;
-                                                open_advanced = true;
+                    ui_state.sidebar.pieces = sidebar_collapsing(
+                        ui,
+                        "pieces",
+                        "Pieces",
+                        ui_state.sidebar.pieces,
+                        false,
+                        |ui| {
+                        ui_state.sidebar.presets = sidebar_collapsing(
+                            ui,
+                            "pieces_presets",
+                            "Presets",
+                            ui_state.sidebar.presets,
+                            false,
+                            |ui| {
+                                let catalog = GameDefinition::preset_catalog();
+                                let n = catalog.len().max(1);
+                                if ui_state.preset_index >= n {
+                                    ui_state.preset_index = 0;
+                                }
+                                let idx = ui_state.preset_index;
+                                let mut load_preset = |new_idx: usize| {
+                                    ui_state.preset_index = new_idx % n;
+                                    draft = apply_preset_index(ui_state.preset_index);
+                                };
+                                egui::ComboBox::from_id_salt("preset_pick")
+                                    .selected_text(catalog[idx].0)
+                                    .show_ui(ui, |ui| {
+                                        for (i, (label, _)) in catalog.iter().enumerate() {
+                                            if ui
+                                                .selectable_label(idx == i, *label)
+                                                .clicked()
+                                            {
+                                                load_preset(i);
                                             }
                                         }
                                     });
+                                ui.horizontal(|ui| {
+                                    if ui.button("◀ Previous").clicked() {
+                                        load_preset(idx + n - 1);
+                                    }
+                                    if ui.button("Next ▶").clicked() {
+                                        load_preset(idx + 1);
+                                    }
                                 });
+                            },
+                        );
 
-                            ui.add_space(6.0);
-                        } else {
-                            ui.label("No pieces in set");
-                            ui.add_space(6.0);
-                        }
+                        let mut open_advanced = false;
+                        ui_state.sidebar.pieces_summary = sidebar_collapsing(
+                            ui,
+                            "pieces_summary",
+                            "Summary",
+                            ui_state.sidebar.pieces_summary,
+                            false,
+                            |ui| {
+                                if draft.armies.is_empty() {
+                                    ui.label("No pieces in set");
+                                } else {
+                                    let advanced_was_open = ui_state.sidebar.pieces_advanced;
+                                    let row_h = draft
+                                        .armies
+                                        .iter()
+                                        .map(|a| summary_preview_side_px(&a.piece.valid_moves))
+                                        .fold(0.0_f32, f32::max);
+                                    egui::ScrollArea::horizontal()
+                                        .min_scrolled_height(0.0)
+                                        .max_height(row_h)
+                                        .show(ui, |ui| {
+                                            ui.horizontal_top(|ui| {
+                                                ui.spacing_mut().item_spacing =
+                                                    egui::vec2(2.0, 0.0);
+                                                for (army_idx, army) in
+                                                    draft.armies.iter().enumerate()
+                                                {
+                                                    let blocked: Vec<_> = army
+                                                        .blocked_by
+                                                        .iter()
+                                                        .filter_map(|&id| {
+                                                            draft
+                                                                .armies
+                                                                .get(id)
+                                                                .map(|a| a.name.as_str())
+                                                        })
+                                                        .collect();
+                                                    let blocked_line = if blocked.is_empty() {
+                                                        "blocked by: —".to_string()
+                                                    } else {
+                                                        format!(
+                                                            "blocked by: {}",
+                                                            blocked.join(", ")
+                                                        )
+                                                    };
+                                                    let hover = format!(
+                                                        "{army_idx}: {}\n{blocked_line}\nClick to edit",
+                                                        army.name
+                                                    );
+                                                    let selected = army_idx
+                                                        == ui_state.edit_army
+                                                        && (advanced_was_open
+                                                            || open_advanced);
+
+                                                    let preview = move_grid_preview_ui(
+                                                        ui,
+                                                        army_idx,
+                                                        &army.piece.valid_moves,
+                                                        army.color,
+                                                        selected,
+                                                    )
+                                                    .on_hover_text(hover);
+
+                                                    if preview.clicked() {
+                                                        ui_state.edit_army = army_idx;
+                                                        open_advanced = true;
+                                                    }
+                                                }
+                                            });
+                                        });
+                                }
+                            },
+                        );
 
                         pieces_roster_editor_ui(ui, &mut draft, &mut ui_state);
 
                         if !draft.armies.is_empty() {
-                            egui::CollapsingHeader::new("Advanced")
-                                .id_salt("pieces_advanced")
-                                .open(if open_advanced { Some(true) } else { None })
-                                .show(ui, |ui| {
+                            ui_state.sidebar.pieces_advanced = sidebar_collapsing(
+                                ui,
+                                "pieces_advanced",
+                                "Advanced",
+                                ui_state.sidebar.pieces_advanced,
+                                open_advanced,
+                                |ui| {
                                 if ui_state.edit_army >= draft.armies.len() {
                                     ui_state.edit_army =
                                         draft.armies.len().saturating_sub(1);
@@ -675,7 +766,8 @@ pub fn ui_game_definition(
                                         army_idx,
                                     );
                                 }
-                                });
+                            },
+                            );
                         }
                     });
 
@@ -684,7 +776,7 @@ pub fn ui_game_definition(
                     }
 
                     ui.separator();
-                    ui.collapsing("Debug", |ui| {
+                    ui_state.sidebar.debug = sidebar_collapsing(ui, "debug", "Debug", ui_state.sidebar.debug, false, |ui| {
                     if let Some(bounds) = viewport.bounds {
                         let grid_size = grid_texture_size(bounds);
                         ui.label(format!("Grid cells: {} x {}", grid_size.x, grid_size.y));
@@ -896,12 +988,16 @@ fn pieces_roster_editor_ui(
     draft: &mut GameDefinition,
     ui_state: &mut UiState,
 ) {
-    egui::CollapsingHeader::new("Edit roster")
-        .id_salt("pieces_edit_roster")
-        .default_open(false)
-        .show(ui, |ui| {
+    ui_state.sidebar.edit_roster = sidebar_collapsing(
+        ui,
+        "edit_roster",
+        "Edit roster",
+        ui_state.sidebar.edit_roster,
+        false,
+        |ui| {
             pieces_roster_editor_body(ui, draft, ui_state);
-        });
+        },
+    );
 }
 
 fn pieces_roster_editor_body(

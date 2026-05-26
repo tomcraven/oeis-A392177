@@ -9,7 +9,7 @@ use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::{SavedColor, SavedGameDefinition};
 use crate::model::GameDefinition;
 use crate::random_gen::RandomGenConfig;
-use crate::ui::UiState;
+use crate::ui::{SidebarSections, UiState};
 use crate::viewport::ViewportState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -25,6 +25,8 @@ pub struct SavedUiState {
     pub add_piece_color: SavedColor,
     #[serde(default)]
     pub bookmark_selected: Option<usize>,
+    #[serde(default)]
+    pub sidebar: SidebarSections,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -62,6 +64,7 @@ pub fn capture_session(
             roster_remove_army: ui_state.roster_remove_army,
             add_piece_color: SavedColor::from_bevy(ui_state.add_piece_color),
             bookmark_selected,
+            sidebar: ui_state.sidebar.clone(),
         },
     }
 }
@@ -77,6 +80,7 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.add_piece_preset_index = saved.add_piece_preset_index;
     ui_state.roster_remove_army = saved.roster_remove_army.min(n.saturating_sub(1));
     ui_state.add_piece_color = saved.add_piece_color.to_bevy();
+    ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
 
@@ -246,7 +250,10 @@ mod tests {
     #[test]
     fn app_session_round_trips_through_toml() {
         let def = GameDefinition::knight_3_clique();
-        let ui = UiState::default();
+        let mut ui = UiState::default();
+        ui.sidebar.view = true;
+        ui.sidebar.pieces = true;
+        ui.sidebar.pieces_summary = true;
         let session = capture_session(
             &def,
             CameraSessionConfig {
@@ -261,5 +268,8 @@ mod tests {
         let text = toml::to_string_pretty(&session).unwrap();
         let loaded: AppSession = toml::from_str(&text).unwrap();
         assert_eq!(loaded, session);
+        assert!(loaded.ui.sidebar.view);
+        assert!(loaded.ui.sidebar.pieces);
+        assert!(loaded.ui.sidebar.pieces_summary);
     }
 }

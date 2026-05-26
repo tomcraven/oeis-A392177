@@ -5,7 +5,7 @@ use bevy::camera::CameraOutputMode;
 use bevy::camera::visibility::RenderLayers;
 use bevy::render::render_resource::BlendState;
 use bevy_egui::{
-    EguiGlobalSettings, EguiPlugin, EguiPrimaryContextPass, PrimaryEguiContext,
+    EguiGlobalSettings, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, PrimaryEguiContext,
     input::write_egui_wants_input_system,
 };
 
@@ -84,7 +84,7 @@ fn main() {
                 camera::camera_zoom_controls.after(write_egui_wants_input_system),
                 camera::camera_pointer_controls.after(write_egui_wants_input_system),
                 sync_simulation_to_viewport,
-                app_session::persist_app_session,
+                app_session::persist_app_session.after(EguiPostUpdateSet::EndPass),
                 draw_spiral_cells,
                 camera::clamp_camera_zoom_to_texture_limit,
             )
