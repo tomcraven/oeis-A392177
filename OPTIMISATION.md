@@ -22,6 +22,8 @@ These changes are in the tree; they do **not** alter board zoom visuals:
 - **Local cursor/`xy` in `step_turn`** — scan loop mutates locals and writes `cursors`/`cursor_positions` only on placement or failure (fewer repeated vector index ops in the hot loop).
 - **`range_bits_all_set`** — shared helper for forbidden word-tail tests (same bit logic as before, single implementation).
 - **Scan loop word cache (2026-05-26)** — cache active forbidden `u64` across `spiral_step` advances within a word; inline same-word tail skip (no closure); `get`-style membership checks; drop unreachable `word_end == 0` branch.
+- **`step_turn_scan` const-generic counter (2026-05-26)** — `COUNT_CELLS` monomorphization drops per-iteration `cells_examined` increments on the release `step_turn` path; tests still use `step_turn_inner`.
+- **`ForbiddenSet::insert` hot path (2026-05-26)** — branch on `word_index < words.len()` before `resize`; late-game fanout mostly ORs into existing words.
 
 ## Left in stash (changes visuals or GPU risk)
 
@@ -151,3 +153,15 @@ cargo test --release --features bevy/dynamic_linking scan_rejection_late_game --
 - No further low-risk CPU wins obvious without deeper profiling (`sample`/`perf`) on `step_turn` codegen (scan vs `place` / inlined `record_forbidden`). Scan-rejection survey shows per-turn rejections stay **O(1)** (max ~286 in tested configs), not thousands—see **`step_turn` scan rejections** above.
 - **2026-05-26 session baseline** (`cargo rund --release --bin time_sim`, 15 iters): `knight_2_pairwise` med 2.589 ms, `knight_3_clique` 3.041, `leaper_4_mixed_clique` 3.463, `guard_6_clique` 4.011, `chimera_3_clique` 4.719 ms; checksums match golden table above.
 - **2026-05-26 round-2 baseline** (`TIME_SIM_ITERS=20`): medians 2.600 / 3.044 / 3.436 / 4.051 / 4.604 ms (same five cases); twelve new hypotheses tried, none kept (see round 2 above).
+
+## What did not work (2026-05-26 perf pass, round 3)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians `knight_2_pairwise` 2.988, `knight_3_clique` 3.021, `leaper_4_mixed_clique` 3.424, `guard_6_clique` 4.004, `chimera_3_clique` 4.595 ms. Checksums unchanged on all runs; `cargo testd` passed each time.
+
+- **Occupancy `contains_index` via explicit `idx < len` branch** — `knight_2_pairwise` median up (~3.11 ms); reverted (same idea as round-2 explicit branch regression).
+- **Proactive forbidden word-tail skip at loop head** (jump before examining `cursor` when the rest of the word is all forbidden) — extra mask work every iteration; medians up on multi-army cases (e.g. `guard_6_clique` ~4.31 ms, `chimera_3_clique` ~4.88 ms); reverted.
+- **`forb_word == 0` inner scan loop** (occupancy-only until word boundary) — mixed; clique presets worse despite slightly faster `knight_2_pairwise`; reverted.
+- **`#[cold]` on `place`** — within jitter / slight chimera regression; reverted.
+- **Occupancy `insert` with `index < len` branch** — noisy vs forbidden-only insert win alone; reverted.
+
+**Kept (round 3 A/B):** `step_turn_scan::<false>` (no release counter) + `ForbiddenSet::insert` existing-word branch. Confirming run medians: 2.808 / 2.836 / 3.243 / 3.859 / 4.371 ms (−4–6% vs session baseline above).

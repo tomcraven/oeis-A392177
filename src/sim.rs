@@ -129,14 +129,24 @@ impl Simulation {
 
     /// One army takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
-        self.step_turn_inner(def).0
+        self.step_turn_scan::<false>(def, &mut 0)
     }
 
     /// `(placed, spiral_cells_examined)` — one loop iteration per examined index (including the placed cell).
     fn step_turn_inner(&mut self, def: &GameDefinition) -> (bool, u32) {
+        let mut cells_examined = 0u32;
+        let placed = self.step_turn_scan::<true>(def, &mut cells_examined);
+        (placed, cells_examined)
+    }
+
+    fn step_turn_scan<const COUNT_CELLS: bool>(
+        &mut self,
+        def: &GameDefinition,
+        cells_examined: &mut u32,
+    ) -> bool {
         let turn_order_len = def.turn_order.len();
         if turn_order_len == 0 {
-            return (false, 0);
+            return false;
         }
         let army_id = def.turn_order[self.turn_order_index];
         self.turn_order_index += 1;
@@ -151,10 +161,11 @@ impl Simulation {
         let mut cursor = self.cursors[army_id];
         let mut xy = self.cursor_positions[army_id];
         let mut forb_word = forbidden.word_bits(cursor as usize >> 6);
-        let mut cells_examined = 0u32;
 
         loop {
-            cells_examined += 1;
+            if COUNT_CELLS {
+                *cells_examined += 1;
+            }
             let bit = 1u64 << (cursor & 63);
             let occupied = occupancy.contains_index(cursor);
             let forbidden_here = forb_word & bit != 0;
@@ -162,14 +173,14 @@ impl Simulation {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
                 self.place(def, cursor, xy, army_id);
-                return (true, cells_examined);
+                return true;
             }
 
             let next = cursor + 1;
             if next == 0 {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
-                return (false, cells_examined);
+                return false;
             }
 
             let word_end = ((cursor >> 6) + 1) << 6;
@@ -183,7 +194,7 @@ impl Simulation {
                     if cursor == u32::MAX {
                         self.cursors[army_id] = cursor;
                         self.cursor_positions[army_id] = xy;
-                        return (false, cells_examined);
+                        return false;
                     }
                     forb_word = forbidden.word_bits(cursor as usize >> 6);
                     continue;
@@ -196,7 +207,7 @@ impl Simulation {
             if cursor == u32::MAX {
                 self.cursors[army_id] = cursor;
                 self.cursor_positions[army_id] = xy;
-                return (false, cells_examined);
+                return false;
             }
 
             if (cursor & 63) == 0 {
@@ -288,10 +299,13 @@ impl ForbiddenSet {
 
     fn insert(&mut self, index: u32) {
         let word_index = index as usize >> 6;
-        if word_index >= self.words.len() {
+        let bit = 1u64 << (index & 63);
+        if word_index < self.words.len() {
+            self.words[word_index] |= bit;
+        } else {
             self.words.resize(word_index + 1, 0);
+            self.words[word_index] |= bit;
         }
-        self.words[word_index] |= 1u64 << (index & 63);
     }
 
     #[cfg(test)]
