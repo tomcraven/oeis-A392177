@@ -404,3 +404,21 @@ Users can zoom to the viewport cap (~4096 half-extent → **~67M** visible cells
 **Headless max zoom** (`PERF_RENDER_TURNS=20000000`, `max_zoom_grid` case): median raster **~22 ms** (15 iters, M4-class macOS) vs **~148 ms** before parallel + u32 fill (same checksum `14869173723860730011`). Small grids unchanged (~0.12 ms @ 2401 cells).
 
 **Tests:** `render::tests::max_zoom_raster_completes_within_budget` (±512 grid, 120 ms budget on dev builds).
+
+## What did not work (2026-05-27 — spiral / `xy_to_index` investigation)
+
+**Goal:** Generic (piece- and preset-agnostic) improvements to [`xy_to_index`](src/spiral.rs), [`index_to_xy`](src/spiral.rs), and scan stepping. Harness: `cargo testd`; release `cargo rund --release --bin time_sim` (`TIME_SIM_ITERS=15–20`, `TIME_SIM_WARMUP=2`); survey `sim::tests::attack_indexing_survey`; isolated ns/op comparison of `spiral_step` vs `ring_offset_succ` (800k ops, release).
+
+**Findings (geometry, unchanged from attack-indexing survey):**
+
+- No runtime shortcut for `record_forbidden`: index Δ is unique per `(placement_index, move)`; ring-only or lazy per-index memo is invalid; coordinate LUT at `R=448` already regressed (round 7).
+- **`xy_to_index` remains the dominant generic place cost** (~60–72% of place replay post–attack-layers); scan rejections stay ~1–2 `spiral_step`s per placement.
+
+**Hypotheses tried (not kept):**
+
+- **`ring_offset_succ` scan loop** — track `RingOffset` in `step_turn_scan`, decode `xy` with `ring_offset_to_xy` only on exit, replace per-rejection `spiral_step` with `ring_offset_succ` (microbench ~1.6 ns/op vs `spiral_step` ~2.6 ns/op). Checksums unchanged; release `time_sim` medians within normal jitter vs pre-change baseline (e.g. five-case medians ~3.0–4.2 ms); extra `ring_offset_to_xy` on successful placements offsets cheaper succ. **Reverted** — no reliable end-to-end win.
+- **Deduplicate `index_to_xy` / `xy_to_index` via ring/offset helpers only** — same algorithm; no measured sim benefit. **Reverted** with scan change.
+
+**Kept:** none — tree unchanged for spiral/sim.
+
+**Still-agnostic directions (not implemented):** incremental grid raster (interactive); any representation change that avoids per-move `(x,y)→index` without piece-specific tables (large sim change). Do not re-open runtime coordinate LUT or scan loop occupancy/forbidden reorder without a new hypothesis.
