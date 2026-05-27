@@ -8,6 +8,7 @@ use crate::share_code::{self, ShareCapture};
 use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
+#[cfg(not(target_family = "wasm"))]
 use crate::CELL_SIZE;
 use crate::model::{Army, GameDefinition, PieceDef};
 use crate::mutate::{
@@ -19,7 +20,9 @@ use crate::random_gen::{
     AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig,
     generate_random_game, generate_random_pieces_game,
 };
-use crate::render::{RenderCache, grid_texture_size};
+use crate::render::RenderCache;
+#[cfg(not(target_family = "wasm"))]
+use crate::render::grid_texture_size;
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
 
@@ -769,13 +772,15 @@ pub fn ui_game_definition(
                         ui_state.sidebar.random_pieces,
                         false,
                         |ui| {
-                        let rpc = &mut ui_state.random_pieces_config;
                         let catalog = PieceDef::piece_catalog();
+                        {
+                        let rpc = &mut ui_state.random_pieces_config;
 
                         let slot_count = rpc.slots.len();
                         let mut remove_at: Option<usize> = None;
                         for slot_i in 0..slot_count {
                             let mut locked = rpc.slots[slot_i].locked;
+                            let mut random_attack = rpc.slots[slot_i].random_attack;
                             let mut catalog_index = rpc.slots[slot_i]
                                 .catalog_index
                                 .min(catalog.len().saturating_sub(1));
@@ -788,8 +793,10 @@ pub fn ui_game_definition(
                                     .get(catalog_index)
                                     .map(|(name, _)| *name)
                                     .unwrap_or("?")
+                            } else if random_attack {
+                                "random attack"
                             } else {
-                                "random"
+                                "random preset"
                             };
                             ui.horizontal(|ui| {
                                 if slot_count > 1 {
@@ -810,16 +817,31 @@ pub fn ui_game_definition(
                                 .selected_text(selected_label)
                                 .show_ui(ui, |ui| {
                                     if ui
-                                        .selectable_label(!locked, "random")
+                                        .selectable_label(
+                                            !locked && !random_attack,
+                                            "random preset",
+                                        )
                                         .clicked()
                                     {
                                         locked = false;
+                                        random_attack = false;
+                                    }
+                                    if ui
+                                        .selectable_label(
+                                            !locked && random_attack,
+                                            "random attack",
+                                        )
+                                        .clicked()
+                                    {
+                                        locked = false;
+                                        random_attack = true;
                                     }
                                     for (ci, (name, _)) in catalog.iter().enumerate() {
                                         let picked =
                                             locked && catalog_index == ci;
                                         if ui.selectable_label(picked, *name).clicked() {
                                             locked = true;
+                                            random_attack = false;
                                             catalog_index = ci;
                                         }
                                     }
@@ -834,6 +856,7 @@ pub fn ui_game_definition(
                                 }
                             });
                             rpc.slots[slot_i].locked = locked;
+                            rpc.slots[slot_i].random_attack = random_attack;
                             rpc.slots[slot_i].catalog_index = catalog_index;
                         }
                         if let Some(i) = remove_at {
@@ -853,14 +876,22 @@ pub fn ui_game_definition(
                                 rpc.slots.push(RandomPieceSlot::with_default_color(i));
                             }
                         }
+                        }
 
                         ui.add_space(4.0);
                         ui.separator();
                         ui.add_space(6.0);
                         if ui.button("Generate random pieces").clicked() {
-                            rpc.sanitize();
+                            ui_state.random_pieces_config.sanitize();
+                            let pieces_cfg = ui_state.random_pieces_config.clone();
+                            let mut attack_cfg = ui_state.random_gen.clone();
+                            attack_cfg.sanitize();
                             let mut rng = rand::rng();
-                            draft = generate_random_pieces_game(rpc, &mut rng);
+                            draft = generate_random_pieces_game(
+                                &pieces_cfg,
+                                &attack_cfg,
+                                &mut rng,
+                            );
                         }
                     });
 
@@ -1128,13 +1159,22 @@ pub fn ui_game_definition(
                                     ui.text_edit_singleline(&mut draft.armies[army_idx].name);
                                 });
 
-                                ui.checkbox(
-                                    &mut draft.armies[army_idx].enabled,
-                                    "Enabled",
-                                )
-                                .on_hover_text(
-                                    "Disabled pieces stay in the set but do not take placement turns",
-                                );
+                                ui.horizontal(|ui| {
+                                    ui.checkbox(
+                                        &mut draft.armies[army_idx].enabled,
+                                        "Enabled",
+                                    )
+                                    .on_hover_text(
+                                        "Disabled pieces stay in the set but do not take placement turns",
+                                    );
+                                    if ui.button("Duplicate").clicked() {
+                                        duplicate_draft_army(
+                                            &mut draft,
+                                            &mut ui_state,
+                                            army_idx,
+                                        );
+                                    }
+                                });
 
                                 let rgb = draft.armies[army_idx].color.to_srgba();
                                 let mut arr = [rgb.red, rgb.green, rgb.blue];
@@ -1207,36 +1247,54 @@ pub fn ui_game_definition(
                         draft.turn_order = (0..draft.armies.len()).collect();
                     }
 
-                    ui.separator();
-                    ui_state.sidebar.debug = sidebar_collapsing(ui, "debug", "Debug", ui_state.sidebar.debug, false, |ui| {
-                    if let Some(bounds) = viewport.bounds {
-                        let grid_size = grid_texture_size(bounds);
-                        ui.label(format!("Grid cells: {} x {}", grid_size.x, grid_size.y));
-                        ui.label(format!(
-                            "Render texels: {}",
-                            grid_size.x as u64 * grid_size.y as u64
-                        ));
-                        ui.label(format!("Target index: {}", viewport.target_index));
-                    } else {
-                        ui.label("Grid cells: pending");
-                    }
-
-                    if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
-                        (camera_q.single(), window_q.single())
+                    #[cfg(not(target_family = "wasm"))]
                     {
-                        let board_width_px =
-                            (window.width() - viewport.left_inset_px).ceil().max(1.0);
-                        let world_per_screen_px =
-                            ortho.area.width() / board_width_px.max(1.0);
-                        let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
-                        let board_pixels =
-                            board_width_px as u64 * window.height().ceil().max(1.0) as u64;
-                        ui.label(format!("Zoom scale: {:.3}", ortho.scale));
-                        ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
-                        ui.label(format!("Board pixels: {board_pixels}"));
-                        ui.label(format!("Left inset px: {:.0}", viewport.left_inset_px));
+                        ui.separator();
+                        ui_state.sidebar.debug = sidebar_collapsing(
+                            ui,
+                            "debug",
+                            "Debug",
+                            ui_state.sidebar.debug,
+                            false,
+                            |ui| {
+                                if let Some(bounds) = viewport.bounds {
+                                    let grid_size = grid_texture_size(bounds);
+                                    ui.label(format!(
+                                        "Grid cells: {} x {}",
+                                        grid_size.x, grid_size.y
+                                    ));
+                                    ui.label(format!(
+                                        "Render texels: {}",
+                                        grid_size.x as u64 * grid_size.y as u64
+                                    ));
+                                    ui.label(format!("Target index: {}", viewport.target_index));
+                                } else {
+                                    ui.label("Grid cells: pending");
+                                }
+
+                                if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
+                                    (camera_q.single(), window_q.single())
+                                {
+                                    let board_width_px = (window.width() - viewport.left_inset_px)
+                                        .ceil()
+                                        .max(1.0);
+                                    let world_per_screen_px =
+                                        ortho.area.width() / board_width_px.max(1.0);
+                                    let cells_per_screen_px =
+                                        world_per_screen_px / CELL_SIZE;
+                                    let board_pixels = board_width_px as u64
+                                        * window.height().ceil().max(1.0) as u64;
+                                    ui.label(format!("Zoom scale: {:.3}", ortho.scale));
+                                    ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
+                                    ui.label(format!("Board pixels: {board_pixels}"));
+                                    ui.label(format!(
+                                        "Left inset px: {:.0}",
+                                        viewport.left_inset_px
+                                    ));
+                                }
+                            },
+                        );
                     }
-                    });
                 });
         });
     viewport.left_inset_px = panel_response.response.rect.width();
@@ -1412,6 +1470,26 @@ fn sidebar_min_max_drag_row<T>(
         );
     });
     ui.add_space(SIDEBAR_FIELD_GAP);
+}
+
+fn duplicate_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {
+    if army_idx >= draft.armies.len() {
+        return;
+    }
+    let mut copy = draft.armies[army_idx].clone();
+    copy.name = format!("{} copy", copy.name);
+    let new_id = draft.armies.len();
+    for army in &mut draft.armies {
+        if army.blocked_by.contains(&army_idx) && !army.blocked_by.contains(&new_id) {
+            army.blocked_by.push(new_id);
+        }
+    }
+    draft.armies.push(copy);
+    draft.turn_order.push(new_id);
+    ui_state.edit_army = new_id;
+    ui_state.roster_remove_army = ui_state
+        .roster_remove_army
+        .min(draft.armies.len().saturating_sub(1));
 }
 
 fn remove_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {

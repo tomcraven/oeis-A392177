@@ -84,6 +84,9 @@ impl RandomGenConfig {
 pub struct RandomPieceSlot {
     #[serde(default)]
     pub locked: bool,
+    /// When [`Self::locked`] is false, use random attack blobs from [`RandomGenConfig`].
+    #[serde(default)]
+    pub random_attack: bool,
     /// Index into [`PieceDef::piece_catalog`] when [`Self::locked`] is true.
     #[serde(default)]
     pub catalog_index: usize,
@@ -99,6 +102,7 @@ impl Default for RandomPieceSlot {
     fn default() -> Self {
         Self {
             locked: false,
+            random_attack: false,
             catalog_index: 0,
             color: default_random_slot_color(),
         }
@@ -125,11 +129,13 @@ fn default_random_piece_slots() -> Vec<RandomPieceSlot> {
     vec![
         RandomPieceSlot {
             locked: true,
+            random_attack: false,
             catalog_index: 0,
             color: SavedColor::from_bevy(GameDefinition::default_army_color(0)),
         },
         RandomPieceSlot {
             locked: false,
+            random_attack: false,
             catalog_index: 0,
             color: SavedColor::from_bevy(GameDefinition::default_army_color(1)),
         },
@@ -159,28 +165,61 @@ impl RandomPiecesConfig {
 
 pub fn generate_random_pieces_game(
     config: &RandomPiecesConfig,
+    attack_config: &RandomGenConfig,
     rng: &mut impl Rng,
 ) -> GameDefinition {
     let mut cfg = config.clone();
     cfg.sanitize();
+    let mut attack_cfg = attack_config.clone();
+    attack_cfg.sanitize();
     let catalog = PieceDef::piece_catalog();
     let n = cfg.slots.len();
+
+    let any_random_attack = cfg
+        .slots
+        .iter()
+        .any(|s| !s.locked && s.random_attack);
+    let shared_attack = if any_random_attack && attack_cfg.identical_pieces {
+        Some(random_attack_pattern(
+            rng,
+            attack_cfg.attack_radius_min,
+            attack_cfg.attack_radius_max,
+            attack_cfg.pattern_density,
+            attack_cfg.attack_symmetry,
+        ))
+    } else {
+        None
+    };
 
     let armies: Vec<Army> = cfg
         .slots
         .iter()
         .enumerate()
         .map(|(i, slot)| {
-            let catalog_index = if slot.locked {
-                slot.catalog_index
+            let (name, piece) = if slot.locked {
+                let (label, factory) = catalog[slot.catalog_index];
+                (label.to_string(), factory())
+            } else if slot.random_attack {
+                let valid_moves = if let Some(moves) = &shared_attack {
+                    moves.clone()
+                } else {
+                    random_attack_pattern(
+                        rng,
+                        attack_cfg.attack_radius_min,
+                        attack_cfg.attack_radius_max,
+                        attack_cfg.pattern_density,
+                        attack_cfg.attack_symmetry,
+                    )
+                };
+                (format!("Piece {i}"), PieceDef { valid_moves })
             } else {
-                rng.random_range(0..catalog.len())
+                let catalog_index = rng.random_range(0..catalog.len());
+                let (label, factory) = catalog[catalog_index];
+                (label.to_string(), factory())
             };
-            let (name, factory) = catalog[catalog_index];
-            let piece = factory();
             let blocked_by = all_other_armies(i, n);
             Army {
-                name: name.to_string(),
+                name,
                 color: slot.color.to_bevy(),
                 piece,
                 blocked_by,
@@ -601,7 +640,8 @@ mod tests {
             ],
         };
         let mut rng = StdRng::seed_from_u64(7);
-        let def = generate_random_pieces_game(&cfg, &mut rng);
+        let attack_cfg = RandomGenConfig::default();
+        let def = generate_random_pieces_game(&cfg, &attack_cfg, &mut rng);
         assert_eq!(def.armies.len(), 2);
         assert_eq!(def.armies[0].piece, knight);
         assert_eq!(def.armies[0].name, "knight");
