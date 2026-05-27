@@ -17,6 +17,7 @@ pub mod mutate;
 pub mod random_gen;
 pub mod render;
 pub mod share_code;
+pub mod index_order;
 pub mod sim;
 pub mod sim_worker;
 pub mod spiral;

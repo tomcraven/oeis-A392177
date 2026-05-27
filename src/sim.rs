@@ -1,5 +1,7 @@
 use crate::model::{PieceId, GameDefinition};
 use crate::spiral::{index_to_xy, spiral_step, xy_to_index};
+
+pub use crate::index_order::{IndexOrder, SquareSpiral};
 use bevy::prelude::{FromWorld, Resource, World};
 use std::sync::Arc;
 use std::time::Duration;
