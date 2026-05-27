@@ -46,13 +46,10 @@ pub struct SidebarSections {
     #[serde(default)]
     pub view: bool,
     #[serde(default)]
-    pub share: bool,
-    #[serde(default)]
     pub colouring: bool,
-    #[serde(default)]
-    pub presets: bool,
-    #[serde(default)]
-    pub bookmarks: bool,
+    /// Presets, custom bookmarks, and share controls.
+    #[serde(default, alias = "bookmarks", alias = "share", alias = "presets")]
+    pub library: bool,
     #[serde(default, alias = "random_generator")]
     pub random_attacks: bool,
     #[serde(default)]
@@ -85,7 +82,7 @@ pub struct UiState {
     pub edit_army: usize,
     /// When true, attack-square grid toggles apply to every piece in the set.
     pub sync_attack_squares: bool,
-    /// Name for the next bookmark (sidebar Bookmarks section).
+    /// Name for the next custom bookmark (Library section).
     pub bookmark_new_name: String,
     /// Selected entry in [`PieceDef::piece_catalog`] for roster add.
     pub add_piece_preset_index: usize,
@@ -172,6 +169,7 @@ fn import_share_code_from_text(
     cache: &mut RenderCache,
     camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     draft: &mut GameDefinition,
+    bookmarks: &mut BookmarkStore,
 ) {
     match share_code::decode_share_code(code.trim()) {
         Ok(snapshot) => {
@@ -186,6 +184,7 @@ fn import_share_code_from_text(
                 preset_index_for_def,
             );
             *draft = def.clone();
+            bookmarks.selected = None;
         }
         Err(_) => {}
     }
@@ -201,6 +200,7 @@ fn share_code_import_egui_dialog(
     cache: &mut RenderCache,
     camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     draft: &mut GameDefinition,
+    bookmarks: &mut BookmarkStore,
 ) {
     if !ui_state.share_code_import_dialog_open {
         return;
@@ -246,6 +246,7 @@ fn share_code_import_egui_dialog(
             cache,
             camera_q,
             draft,
+            bookmarks,
         );
     }
 }
@@ -300,6 +301,59 @@ fn apply_bookmark(
     ui_state.preset_index = preset_index_for_def(draft).unwrap_or(ui_state.preset_index);
     viewport.target_index = bookmark.target_index;
     apply_bookmark_camera(bookmark.camera, camera_q);
+}
+
+fn library_entry_count(custom_bookmarks: usize) -> usize {
+    GameDefinition::preset_catalog().len() + custom_bookmarks
+}
+
+fn library_selected_index(bookmarks: &BookmarkStore, preset_index: usize) -> usize {
+    let preset_count = GameDefinition::preset_catalog().len();
+    if let Some(j) = bookmarks.selected {
+        if j < bookmarks.bookmarks.len() {
+            return preset_count + j;
+        }
+    }
+    preset_index.min(preset_count.saturating_sub(1))
+}
+
+fn library_selected_label(bookmarks: &BookmarkStore, preset_index: usize) -> &str {
+    let catalog = GameDefinition::preset_catalog();
+    if let Some(j) = bookmarks.selected {
+        if let Some(bm) = bookmarks.bookmarks.get(j) {
+            return bm.name.as_str();
+        }
+    }
+    let idx = preset_index.min(catalog.len().saturating_sub(1));
+    catalog.get(idx).map(|(label, _)| *label).unwrap_or("—")
+}
+
+fn apply_library_index(
+    index: usize,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+    bookmarks: &mut BookmarkStore,
+    viewport: &mut ViewportState,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+) {
+    let preset_count = GameDefinition::preset_catalog().len();
+    let total = library_entry_count(bookmarks.bookmarks.len());
+    if total == 0 {
+        return;
+    }
+    let index = index % total;
+    if index < preset_count {
+        bookmarks.selected = None;
+        ui_state.preset_index = index;
+        *draft = apply_preset_index(index);
+    } else {
+        let j = index - preset_count;
+        if j < bookmarks.bookmarks.len() {
+            bookmarks.selected = Some(j);
+            let bm = bookmarks.bookmarks[j].clone();
+            apply_bookmark(&bm, draft, ui_state, viewport, camera_q);
+        }
+    }
 }
 
 pub fn ui_game_definition(
@@ -434,13 +488,121 @@ pub fn ui_game_definition(
                             }
                         }
                     });
-                    ui_state.sidebar.share = sidebar_collapsing(
+                    ui_state.sidebar.library = sidebar_collapsing(
                         ui,
-                        "share",
-                        "Share",
-                        ui_state.sidebar.share,
+                        "library",
+                        "Library",
+                        ui_state.sidebar.library,
                         false,
                         |ui| {
+                            let catalog = GameDefinition::preset_catalog();
+                            let custom_n = bookmarks.bookmarks.len();
+                            if let Some(sel) = bookmarks.selected {
+                                if sel >= custom_n {
+                                    bookmarks.selected = None;
+                                }
+                            }
+                            let total = library_entry_count(custom_n);
+                            let selected_idx =
+                                library_selected_index(&bookmarks, ui_state.preset_index);
+                            let selected_label =
+                                library_selected_label(&bookmarks, ui_state.preset_index);
+
+                            if total > 0 {
+                                egui::ComboBox::from_id_salt("library_pick")
+                                    .selected_text(selected_label)
+                                    .show_ui(ui, |ui| {
+                                        let mut pick: Option<usize> = None;
+                                        for (i, (label, _)) in catalog.iter().enumerate() {
+                                            let is_sel = bookmarks.selected.is_none()
+                                                && ui_state.preset_index == i;
+                                            if ui.selectable_label(is_sel, *label).clicked() {
+                                                pick = Some(i);
+                                            }
+                                        }
+                                        for (j, bm) in bookmarks.bookmarks.iter().enumerate() {
+                                            if ui
+                                                .selectable_label(
+                                                    bookmarks.selected == Some(j),
+                                                    &bm.name,
+                                                )
+                                                .clicked()
+                                            {
+                                                pick = Some(catalog.len() + j);
+                                            }
+                                        }
+                                        if let Some(i) = pick {
+                                            apply_library_index(
+                                                i,
+                                                &mut draft,
+                                                &mut ui_state,
+                                                &mut bookmarks,
+                                                &mut viewport,
+                                                &mut camera_q,
+                                            );
+                                        }
+                                    });
+                                ui.horizontal(|ui| {
+                                    if ui.button("◀ Previous").clicked() {
+                                        apply_library_index(
+                                            selected_idx + total - 1,
+                                            &mut draft,
+                                            &mut ui_state,
+                                            &mut bookmarks,
+                                            &mut viewport,
+                                            &mut camera_q,
+                                        );
+                                    }
+                                    if ui.button("Next ▶").clicked() {
+                                        apply_library_index(
+                                            selected_idx + 1,
+                                            &mut draft,
+                                            &mut ui_state,
+                                            &mut bookmarks,
+                                            &mut viewport,
+                                            &mut camera_q,
+                                        );
+                                    }
+                                });
+                                ui.add_space(4.0);
+                            }
+
+                            ui.text_edit_singleline(&mut ui_state.bookmark_new_name);
+                            ui.horizontal(|ui| {
+                                let custom_selected = bookmarks.selected;
+                                let can_delete =
+                                    custom_selected.is_some() && custom_n > 0;
+                                if ui
+                                    .add_enabled(can_delete, egui::Button::new("Delete bookmark"))
+                                    .clicked()
+                                {
+                                    bookmarks.remove_selected();
+                                }
+                                if ui.button("Add bookmark").clicked() {
+                                    let name = if ui_state.bookmark_new_name.trim().is_empty() {
+                                        format!("Bookmark {}", custom_n + 1)
+                                    } else {
+                                        ui_state.bookmark_new_name.trim().to_string()
+                                    };
+                                    ui_state.bookmark_new_name.clear();
+                                    if let Some(camera) =
+                                        read_camera_session(&camera_q, &window_q, &viewport)
+                                    {
+                                        let bm = Bookmark::capture(
+                                            name,
+                                            &draft,
+                                            camera,
+                                            viewport.target_index,
+                                        );
+                                        bookmarks.add(bm);
+                                    }
+                                }
+                            });
+
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+
                             const SHARE_COPIED_FLASH_SECS: f64 = 1.0;
                             let now = ctx.input(|i| i.time);
                             if ui_state
@@ -527,83 +689,6 @@ pub fn ui_game_definition(
                             }
                         },
                     );
-                    ui_state.sidebar.bookmarks = sidebar_collapsing(
-                        ui,
-                        "bookmarks",
-                        "Bookmarks",
-                        ui_state.sidebar.bookmarks,
-                        false,
-                        |ui| {
-                        let n = bookmarks.bookmarks.len();
-                        if let Some(sel) = bookmarks.selected {
-                            if sel >= n {
-                                bookmarks.selected = None;
-                            }
-                        }
-                        let selected = bookmarks.selected;
-
-                        if n > 0 {
-                            let idx = selected.unwrap_or(0);
-                            let label = bookmarks.bookmarks[idx].name.as_str();
-                            egui::ComboBox::from_id_salt("bookmark_pick")
-                                .selected_text(label)
-                                .show_ui(ui, |ui| {
-                                    let mut pick: Option<usize> = None;
-                                    for (i, bm) in bookmarks.bookmarks.iter().enumerate() {
-                                        if ui
-                                            .selectable_label(selected == Some(i), &bm.name)
-                                            .clicked()
-                                        {
-                                            pick = Some(i);
-                                        }
-                                    }
-                                    if let Some(i) = pick {
-                                        bookmarks.selected = Some(i);
-                                        let bm = bookmarks.bookmarks[i].clone();
-                                        apply_bookmark(
-                                            &bm,
-                                            &mut draft,
-                                            &mut ui_state,
-                                            &mut viewport,
-                                            &mut camera_q,
-                                        );
-                                    }
-                                });
-                            ui.add_space(4.0);
-                        }
-
-                        ui.text_edit_singleline(&mut ui_state.bookmark_new_name);
-
-                        ui.horizontal(|ui| {
-                            let can_delete = selected.is_some() && n > 0;
-                            if ui
-                                .add_enabled(can_delete, egui::Button::new("Delete bookmark"))
-                                .clicked()
-                            {
-                                bookmarks.remove_selected();
-                            }
-                            if ui.button("Add bookmark").clicked() {
-                                let name = if ui_state.bookmark_new_name.trim().is_empty() {
-                                    format!("Bookmark {}", n + 1)
-                                } else {
-                                    ui_state.bookmark_new_name.trim().to_string()
-                                };
-                                ui_state.bookmark_new_name.clear();
-                                if let Some(camera) =
-                                    read_camera_session(&camera_q, &window_q, &viewport)
-                                {
-                                    let bm = Bookmark::capture(
-                                        name,
-                                        &draft,
-                                        camera,
-                                        viewport.target_index,
-                                    );
-                                    bookmarks.add(bm);
-                                }
-                            }
-                        });
-                    });
-
                     ui_state.sidebar.random_attacks = sidebar_collapsing(
                         ui,
                         "random_attacks",
@@ -952,46 +1037,6 @@ pub fn ui_game_definition(
                         ui_state.sidebar.pieces,
                         false,
                         |ui| {
-                        ui_state.sidebar.presets = sidebar_collapsing(
-                            ui,
-                            "pieces_presets",
-                            "Presets",
-                            ui_state.sidebar.presets,
-                            false,
-                            |ui| {
-                                let catalog = GameDefinition::preset_catalog();
-                                let n = catalog.len().max(1);
-                                if ui_state.preset_index >= n {
-                                    ui_state.preset_index = 0;
-                                }
-                                let idx = ui_state.preset_index;
-                                let mut load_preset = |new_idx: usize| {
-                                    ui_state.preset_index = new_idx % n;
-                                    draft = apply_preset_index(ui_state.preset_index);
-                                };
-                                egui::ComboBox::from_id_salt("preset_pick")
-                                    .selected_text(catalog[idx].0)
-                                    .show_ui(ui, |ui| {
-                                        for (i, (label, _)) in catalog.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(idx == i, *label)
-                                                .clicked()
-                                            {
-                                                load_preset(i);
-                                            }
-                                        }
-                                    });
-                                ui.horizontal(|ui| {
-                                    if ui.button("◀ Previous").clicked() {
-                                        load_preset(idx + n - 1);
-                                    }
-                                    if ui.button("Next ▶").clicked() {
-                                        load_preset(idx + 1);
-                                    }
-                                });
-                            },
-                        );
-
                         let mut open_advanced = false;
                         ui_state.sidebar.pieces_summary = sidebar_collapsing(
                             ui,
@@ -1208,6 +1253,7 @@ pub fn ui_game_definition(
             &mut cache,
             &mut camera_q,
             &mut draft,
+            &mut bookmarks,
         );
     }
 
@@ -1221,6 +1267,7 @@ pub fn ui_game_definition(
         &mut cache,
         &mut camera_q,
         &mut draft,
+        &mut bookmarks,
     );
 
     if !draft.same_sim_state(def.as_ref()) {
