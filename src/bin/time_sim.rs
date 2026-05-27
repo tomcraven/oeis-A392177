@@ -30,6 +30,7 @@ fn main() {
         );
     }
 
+    let turns = env_usize("TIME_SIM_TURNS", TURNS);
     let warmup_iters = env_usize("TIME_SIM_WARMUP", DEFAULT_WARMUP_ITERS);
     let measured_iters = env_usize("TIME_SIM_ITERS", DEFAULT_MEASURED_ITERS);
 
@@ -37,7 +38,7 @@ fn main() {
         "mode\tcase\tturns\tplacements\tchecksum\twarmup_iters\tmeasured_iters\tbest_ms\tmean_ms\tmedian_ms\tstdev_ms\tmax_ms"
     );
 
-    let cases: Vec<BenchCase> = bench_cases();
+    let cases: Vec<BenchCase> = bench_cases(turns);
     for case in &cases {
         run_case_timed(case, warmup_iters, measured_iters);
     }
@@ -118,32 +119,32 @@ fn env_usize(name: &str, default: usize) -> usize {
         .unwrap_or(default)
 }
 
-fn bench_cases() -> Vec<BenchCase> {
+fn bench_cases(turns: usize) -> Vec<BenchCase> {
     vec![
         BenchCase {
             name: "knight_2_pairwise",
             def: GameDefinition::knight_2_pairwise,
-            turns: TURNS,
+            turns,
         },
         BenchCase {
             name: "knight_3_clique",
             def: GameDefinition::knight_3_clique,
-            turns: TURNS,
+            turns,
         },
         BenchCase {
             name: "leaper_4_mixed_clique",
             def: GameDefinition::leaper_4_mixed_clique,
-            turns: TURNS,
+            turns,
         },
         BenchCase {
             name: "king_6_clique",
             def: GameDefinition::king_6_clique,
-            turns: TURNS,
+            turns,
         },
         BenchCase {
             name: "chimera_3_clique",
             def: GameDefinition::chimera_3_clique,
-            turns: TURNS,
+            turns,
         },
     ]
 }

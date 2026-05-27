@@ -1,11 +1,14 @@
 use crate::model::{ArmyId, GameDefinition};
 use crate::spiral::{index_to_xy, spiral_step, xy_to_index};
 use bevy::prelude::{FromWorld, Resource, World};
+use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::platform::time::Instant;
 
 const EMPTY_ARMY: ArmyId = usize::MAX;
+/// Sentinel for unoccupied spiral indices (shared with render).
+pub(crate) const EMPTY_ARMY_SLOT: ArmyId = EMPTY_ARMY;
 
 fn resize_army_vectors<T: Clone>(vec: &mut Vec<T>, len: usize, fill: T) {
     if vec.len() == len {
@@ -256,6 +259,7 @@ impl Simulation {
         if def.armies.is_empty() || def.active_turn_order().is_empty() {
             return;
         }
+        self.occupancy.ensure_unique_for_mutation();
         let start = Instant::now();
         let mut turns_since_check = 0u32;
         while self.needs_work(def, target_index) {
@@ -279,31 +283,51 @@ impl Simulation {
 
 #[derive(Clone, Debug, Default)]
 pub struct OccupancyGrid {
-    cells: Vec<ArmyId>,
+    cells: Arc<Vec<ArmyId>>,
 }
 
 impl OccupancyGrid {
     fn new() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Split shared backing storage so the sim can mutate while UI holds a snapshot `Arc`.
+    pub fn ensure_unique_for_mutation(&mut self) {
+        if Arc::strong_count(&self.cells) > 1 {
+            self.cells = Arc::new(self.cells.as_ref().clone());
+        }
     }
 
     fn clear(&mut self) {
-        self.cells.clear();
+        Arc::make_mut(&mut self.cells).clear();
     }
 
     fn insert(&mut self, index: u32, army_id: ArmyId) {
+        let cells = Arc::make_mut(&mut self.cells);
         let index = index as usize;
-        if index >= self.cells.len() {
+        if index >= cells.len() {
             #[cfg(feature = "place_profile")]
             crate::place_profile::note_occupancy_grow();
-            self.cells.resize(index + 1, EMPTY_ARMY);
+            cells.resize(index + 1, EMPTY_ARMY);
         }
-        self.cells[index] = army_id;
+        cells[index] = army_id;
     }
 
     pub fn get(&self, index: &u32) -> Option<&ArmyId> {
         let army_id = self.cells.get(*index as usize)?;
         (*army_id != EMPTY_ARMY).then_some(army_id)
+    }
+
+    /// Hot-path lookup for rendering (spiral index → army).
+    pub fn army_id_at(&self, index: u32) -> Option<ArmyId> {
+        let army_id = *self.cells.get(index as usize)?;
+        (army_id != EMPTY_ARMY).then_some(army_id)
+    }
+
+    pub fn cells_slice(&self) -> &[ArmyId] {
+        self.cells.as_ref()
     }
 
     fn contains_index(&self, index: u32) -> bool {

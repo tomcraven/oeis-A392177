@@ -8,12 +8,13 @@ Simulation performance work verified with the release timing harness. Rendering 
 - Timing: `cargo run --release --features bevy/dynamic_linking --bin time_sim` (optional `TIME_SIM_ITERS`, `TIME_SIM_WARMUP`; reports mean/median/stdev)
 - Checksums on all representative presets must stay unchanged.
 - **WASM / portable sim CPU work:** Prefer algorithm and data-structure changes that behave the same on native and `wasm32-unknown-unknown`. Do **not** treat release profile tweaks (`lto`, `codegen-units`), `#[inline]` / `#[cold]`, or `unsafe` micro-hacks as the primary optimisation path—they may not apply to wasm shipping profiles (`wasm-release`, `wasm-release-fast`) and are easy to mis-read on native-only A/B. Validate meaningful wins on native `time_sim` first; for wasm-specific regressions, use the wasm release profile when investigating.
+- **Interactive app profiling:** optional Cargo feature `app_profile` (not enabled in default release). Run scripted scenarios with `cargo run --release --features app_profile --bin perf_app -- --perf-scenario zoom_out_catchup` (built-ins: `origin_settled`, `pan_east`, `zoom_out_catchup`, `pan_render_stress`, or path to scenario `.toml`). Prints per-frame ms for `sync_viewport`, `render_raster`, `render_image_write`, `render_sprite_layout`, and worker `display_clone`. Headless raster A/B: `cargo run --release --bin perf_render` (optional `PERF_RENDER_ITERS`, `PERF_RENDER_TURNS`). Unit tests in `render` and `perf_harness` cover raster checksums and script determinism without a window.
 
 ## Cherry-picked from stash (sim / viewport / spiral only)
 
 These changes are in the tree; they do **not** alter board zoom visuals:
 
-- **`OccupancyGrid`** — dense occupancy instead of `HashMap` + separate occupied bitset.
+- **`OccupancyGrid`** — dense occupancy instead of `HashMap` + separate occupied bitset; **`Arc<Vec<ArmyId>>`** so worker→UI snapshots are shallow clones (COW before sim mutation when shared).
 - **`record_forbidden` fanout** — specialize 1–5 target armies; generic fallback for larger fanout.
 - **Rolling `turn_order_index`** — avoids modulo each turn.
 - **`advance_for_duration`** — 16ms wall-clock budget per frame (UI counters tick; sim uses available CPU).
@@ -383,3 +384,23 @@ At 100k turns, place replay is ~2.5–3 ms total — attack indexing is a large 
 Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians with per-turn `active_turn_order()` alloc: `knight_2_pairwise` 5.489, `knight_3_clique` 5.630, `leaper_4_mixed_clique` 5.826, `king_6_clique` 9.980, `chimera_3_clique` 7.336 ms. Checksums unchanged; `cargo testd` passed.
 
 **Change:** `ActiveTurnOrder` lazy view (`GameDefinition::active_turn_order()`) with dense fast path over `turn_order` (not a cached copy on `Simulation` — differs from the 2026-05-25 rejected `turn_order` cache). Confirming run medians: **3.078 / 2.965 / 3.125 / 3.147 / 4.261 ms** (~44–68% vs baseline above on the same session). Prior doc timings (~2.5–4 ms post–attack-layers) align with this fast path; the allocating `active_turn_order()` call per turn had become a large regression vs those numbers.
+
+## Kept (2026-05-27 — grid raster / app profiling)
+
+**Render CPU (`raster_spiral_grid`):** Pre-fill the RGBA buffer with the empty texel color, then only write occupied cells (most visible cells when zoomed out are empty). Reuse the existing `Image` asset when width/height unchanged instead of `Image::new_fill` every redraw.
+
+**Headless baselines** (`cargo run --release --bin perf_render`, 10k turns, 15 iters): `knight_2_tight` (2401 cells) med **0.007 ms**; `knight_3_wide` (21025 cells) med **0.069 ms**; `king_6_wide` (16641 cells) med **0.048 ms**. Checksums stable via `render::tests::raster_checksum_stable_for_knight_pairwise`.
+
+**App profile labels:** `sync_viewport`, `render_raster`, `render_image_write`, `render_sprite_layout`, `display_clone`. Scenario `pan_render_stress` exercises repeated pans for full redraw + sim sync in `perf_app`. After the Arc occupancy change, `display_clone` is mostly pointer bump + metadata, not a full vec copy at 20M indices.
+
+## Kept (2026-05-27 — max zoom / long history)
+
+Users can zoom to the viewport cap (~4096 half-extent → **~67M** visible cells) and accept multi-second frames. Optimise for that reality rather than capping zoom.
+
+**Occupancy snapshots:** `OccupancyGrid` stores cells in `Arc<Vec<ArmyId>>`. `Clone` is cheap; `ensure_unique_for_mutation()` copies only when the worker and main thread both hold the same buffer before a sim batch.
+
+**Raster (`draw_spiral_cells` / `raster_spiral_grid_into`):** Reuse `RenderCache.scratch_rgba`; fill empty texels with bulk `u32` writes; paint occupied cells only; **parallel row bands** on native (`std::thread::scope`, disjoint row slices). WASM keeps sequential rows. Swap scratch into the Bevy `Image` buffer when dimensions match to avoid realloc.
+
+**Headless max zoom** (`PERF_RENDER_TURNS=20000000`, `max_zoom_grid` case): median raster **~22 ms** (15 iters, M4-class macOS) vs **~148 ms** before parallel + u32 fill (same checksum `14869173723860730011`). Small grids unchanged (~0.12 ms @ 2401 cells).
+
+**Tests:** `render::tests::max_zoom_raster_completes_within_budget` (±512 grid, 120 ms budget on dev builds).

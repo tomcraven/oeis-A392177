@@ -14,12 +14,17 @@ pub struct SimDisplay {
 }
 
 fn display_from_sim(sim: &Simulation) -> SimDisplay {
-    SimDisplay {
+    #[cfg(feature = "app_profile")]
+    let start = std::time::Instant::now();
+    let display = SimDisplay {
         occupancy: sim.occupancy.clone(),
         cursors: sim.cursors.clone(),
         placements_len: sim.placements.len(),
         turn_step: sim.turn_step,
-    }
+    };
+    #[cfg(feature = "app_profile")]
+    crate::app_profile::note_display_clone_ns(start.elapsed().as_nanos() as u64);
+    display
 }
 
 // --- native: simulation on a background thread --------------------------------
@@ -200,6 +205,7 @@ mod threaded {
         mut job_id: u64,
     ) {
         loop {
+            sim.occupancy.ensure_unique_for_mutation();
             let start = Instant::now();
             let mut turns = 0u32;
 

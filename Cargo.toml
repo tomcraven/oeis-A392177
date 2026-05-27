@@ -124,8 +124,18 @@ strip = "debuginfo"
 
 [features]
 place_profile = []
+app_profile = []
 
 [[bin]]
 name = "profile_place"
 path = "src/bin/profile_place.rs"
 required-features = ["place_profile"]
+
+[[bin]]
+name = "perf_render"
+path = "src/bin/perf_render.rs"
+
+[[bin]]
+name = "perf_app"
+path = "src/bin/perf_app.rs"
+required-features = ["app_profile"]

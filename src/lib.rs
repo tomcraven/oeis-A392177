@@ -1,4 +1,5 @@
 pub mod app_session;
+pub mod app_profile;
 pub mod board_export;
 pub mod bookmark_config;
 pub mod calibration_config;
@@ -6,9 +7,11 @@ pub mod camera;
 pub mod camera_config;
 pub mod discover;
 pub mod discover_catalog;
+pub mod game_app;
 pub mod game_snapshot;
 #[cfg(feature = "place_profile")]
 pub mod place_profile;
+pub mod perf_harness;
 pub mod model;
 pub mod mutate;
 pub mod random_gen;

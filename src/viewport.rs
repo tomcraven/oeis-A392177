@@ -92,6 +92,10 @@ pub fn viewport_grid_bounds(
     }
 }
 
+pub fn spiral_target_index_for_bounds(bounds: GridBounds) -> u32 {
+    max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN)
+}
+
 fn max_visible_spiral_index(bounds: GridBounds) -> u32 {
     let mut max_index = 0;
     for x in bounds.min_x..=bounds.max_x {
@@ -164,6 +168,38 @@ pub fn sync_simulation_to_viewport(
     mut viewport: ResMut<ViewportState>,
     camera_q: Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: Query<&Window>,
+    #[cfg(feature = "app_profile")] mut profile_frame: Option<
+        ResMut<crate::app_profile::AppProfileFrame>,
+    >,
+) {
+    #[cfg(feature = "app_profile")]
+    if let Some(frame) = profile_frame.as_mut() {
+        crate::app_profile::scope("sync_viewport", frame, || {
+            sync_simulation_to_viewport_inner(
+                &mut sim,
+                def.as_ref(),
+                &mut viewport,
+                &camera_q,
+                &window_q,
+            );
+        });
+        return;
+    }
+    sync_simulation_to_viewport_inner(
+        &mut sim,
+        def.as_ref(),
+        &mut viewport,
+        &camera_q,
+        &window_q,
+    );
+}
+
+fn sync_simulation_to_viewport_inner(
+    sim: &mut SimulationBridge,
+    def: &GameDefinition,
+    viewport: &mut ViewportState,
+    camera_q: &Query<(&Transform, &Projection), With<BoardCamera>>,
+    window_q: &Query<&Window>,
 ) {
     let Ok((transform, projection)) = camera_q.single() else {
         return;
@@ -185,11 +221,11 @@ pub fn sync_simulation_to_viewport(
         viewport.render_dirty = true;
     }
 
-    let new_target = max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN);
+    let new_target = spiral_target_index_for_bounds(bounds);
     if new_target != viewport.target_index {
         viewport.target_index = new_target;
         sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
-    } else if sim.needs_work(def.as_ref(), viewport.target_index) && !sim.is_busy() {
+    } else if sim.needs_work(def, viewport.target_index) && !sim.is_busy() {
         sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
     }
 }

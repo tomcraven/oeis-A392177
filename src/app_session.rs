@@ -107,7 +107,7 @@ pub fn config_file_path() -> PathBuf {
 
 #[cfg(not(target_family = "wasm"))]
 pub fn load_session() -> Option<AppSession> {
-    if calibration_config::smoke_test_mode() {
+    if calibration_config::smoke_test_mode() || crate::perf_harness::perf_harness_mode() {
         return None;
     }
     let path = config_file_path();
@@ -117,7 +117,7 @@ pub fn load_session() -> Option<AppSession> {
 
 #[cfg(not(target_family = "wasm"))]
 pub fn save_session(session: &AppSession) -> std::io::Result<()> {
-    if calibration_config::smoke_test_mode() {
+    if calibration_config::smoke_test_mode() || crate::perf_harness::perf_harness_mode() {
         return Ok(());
     }
     let path = config_file_path();

@@ -87,8 +87,12 @@ pub fn camera_controls(
     egui_wants: Res<EguiWantsInput>,
     time: Res<Time>,
     keyboard: Res<ButtonInput<KeyCode>>,
+    harness: Option<Res<crate::perf_harness::PerfHarnessRun>>,
     mut query: Query<(&mut Transform, &PanCamera, &Projection), With<BoardCamera>>,
 ) {
+    if harness.is_some() {
+        return;
+    }
     if egui_wants.wants_keyboard_input() {
         return;
     }
@@ -126,9 +130,14 @@ pub fn camera_controls(
 pub fn camera_zoom_controls(
     egui_wants: Res<EguiWantsInput>,
     mut mouse_wheel: MessageReader<MouseWheel>,
+    harness: Option<Res<crate::perf_harness::PerfHarnessRun>>,
     mut query: Query<&mut Projection, With<BoardCamera>>,
     pan_q: Query<&PanCamera, With<BoardCamera>>,
 ) {
+    if harness.is_some() {
+        mouse_wheel.clear();
+        return;
+    }
     let Ok(mut projection) = query.single_mut() else {
         return;
     };
@@ -159,12 +168,16 @@ pub fn camera_pointer_controls(
     keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
+    harness: Option<Res<crate::perf_harness::PerfHarnessRun>>,
     mut pointer: ResMut<BoardPointerState>,
     mut mouse_button_events: MessageReader<MouseButtonInput>,
     mut mouse_motion_events: MessageReader<MouseMotion>,
     mut pinch_events: MessageReader<PinchGesture>,
     mut query: Query<(&mut Transform, &PanCamera, &mut Projection), With<BoardCamera>>,
 ) {
+    if harness.is_some() {
+        return;
+    }
     let Ok(window) = window_q.single() else {
         return;
     };
