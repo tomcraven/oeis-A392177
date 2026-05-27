@@ -17,15 +17,15 @@ pub struct SavedUiState {
     pub random_gen: RandomGenConfig,
     #[serde(default)]
     pub random_pieces_config: RandomPiecesConfig,
-    pub mutate_army: usize,
+    pub mutate_piece: usize,
     pub mutate_all: bool,
     pub preset_index: usize,
-    pub edit_army: usize,
+    pub edit_piece: usize,
     #[serde(default)]
     pub sync_attack_squares: bool,
     pub bookmark_new_name: String,
     pub add_piece_preset_index: usize,
-    pub roster_remove_army: usize,
+    pub roster_remove_piece: usize,
     pub add_piece_color: SavedColor,
     #[serde(default)]
     pub bookmark_selected: Option<usize>,
@@ -62,14 +62,14 @@ pub fn capture_session(
         ui: SavedUiState {
             random_gen: ui_state.random_gen.clone(),
             random_pieces_config: ui_state.random_pieces_config.clone(),
-            mutate_army: ui_state.mutate_army,
+            mutate_piece: ui_state.mutate_piece,
             mutate_all: ui_state.mutate_all,
             preset_index: ui_state.preset_index,
-            edit_army: ui_state.edit_army,
+            edit_piece: ui_state.edit_piece,
             sync_attack_squares: ui_state.sync_attack_squares,
             bookmark_new_name: ui_state.bookmark_new_name.clone(),
             add_piece_preset_index: ui_state.add_piece_preset_index,
-            roster_remove_army: ui_state.roster_remove_army,
+            roster_remove_piece: ui_state.roster_remove_piece,
             add_piece_color: SavedColor::from_bevy(ui_state.add_piece_color),
             board_colour_mode: ui_state.board_colour_mode,
             bookmark_selected,
@@ -79,17 +79,17 @@ pub fn capture_session(
 }
 
 pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: &SavedUiState) {
-    let n = def.armies.len();
+    let n = def.pieces.len();
     ui_state.random_gen = saved.random_gen.clone();
     ui_state.random_pieces_config = saved.random_pieces_config.clone();
     ui_state.mutate_all = saved.mutate_all;
-    ui_state.mutate_army = saved.mutate_army.min(n.saturating_sub(1));
+    ui_state.mutate_piece = saved.mutate_piece.min(n.saturating_sub(1));
     ui_state.preset_index = saved.preset_index;
-    ui_state.edit_army = saved.edit_army.min(n.saturating_sub(1));
+    ui_state.edit_piece = saved.edit_piece.min(n.saturating_sub(1));
     ui_state.sync_attack_squares = saved.sync_attack_squares;
     ui_state.bookmark_new_name = saved.bookmark_new_name.clone();
     ui_state.add_piece_preset_index = saved.add_piece_preset_index;
-    ui_state.roster_remove_army = saved.roster_remove_army.min(n.saturating_sub(1));
+    ui_state.roster_remove_piece = saved.roster_remove_piece.min(n.saturating_sub(1));
     ui_state.add_piece_color = saved.add_piece_color.to_bevy();
     ui_state.board_colour_mode = saved.board_colour_mode;
     ui_state.sidebar = saved.sidebar.clone();

@@ -14,7 +14,7 @@ const LATE_PLACEMENTS: usize = 1_000;
 
 #[derive(Clone)]
 struct PlaceEvent {
-    army_id: usize,
+    piece_id: usize,
     index: u32,
     xy: (i32, i32),
     inserts_per_placement: usize,
@@ -47,7 +47,7 @@ fn main() {
         let (checksum, work, forb_stats, events, records) = collect_run(&def);
         let step_ms = bench_full_step_turn(&def);
         let place_ms = bench_place_replay(&def, &events);
-        let micro = microbench_components(&def, &events, &records, def.armies.len());
+        let micro = microbench_components(&def, &events, &records, def.pieces.len());
         print_summary_row(name, checksum, step_ms, place_ms, &work);
         print_fanout_report(name, &def, &work, &forb_stats, &events, &records, &micro, place_ms);
         black_box((checksum, events.len()));
@@ -62,9 +62,9 @@ struct MicrobenchMs {
 }
 
 fn threatened_targets(def: &GameDefinition, attacker: usize) -> usize {
-    def.armies
+    def.pieces
         .iter()
-        .filter(|army| army.blocked_by.contains(&attacker))
+        .filter(|piece| piece.blocked_by.contains(&attacker))
         .count()
 }
 
@@ -85,10 +85,10 @@ fn collect_run(
 
     for _ in 0..TURNS {
         assert!(sim.step_turn_profiled(def), "step failed");
-        let (index, army_id) = *sim.placements.last().expect("placement");
-        let moves = def.army(army_id).piece.valid_moves.len();
+        let (index, piece_id) = *sim.placements.last().expect("placement");
+        let moves = def.piece(piece_id).piece.valid_moves.len();
         events.push(PlaceEvent {
-            army_id,
+            piece_id,
             index,
             xy: index_to_xy(index),
             inserts_per_placement: moves,
@@ -124,7 +124,7 @@ fn bench_place_replay(def: &GameDefinition, events: &[PlaceEvent]) -> f64 {
         let mut sim = Simulation::new(def);
         let start = Instant::now();
         for event in events {
-            sim.replay_place_profiled(def, event.index, event.xy, event.army_id);
+            sim.replay_place_profiled(def, event.index, event.xy, event.piece_id);
         }
         black_box(sim.placements.len());
         start.elapsed().as_secs_f64() * 1_000.0
@@ -141,7 +141,7 @@ fn microbench_components(
     def: &GameDefinition,
     events: &[PlaceEvent],
     records: &[(usize, u32)],
-    army_count: usize,
+    piece_count: usize,
 ) -> MicrobenchMs {
     MicrobenchMs {
         xy_to_index: median_ms(5, || bench_xy_to_index(def, events) as f64 / 1e6),
@@ -149,7 +149,7 @@ fn microbench_components(
             bench_forbidden_single_set(records) as f64 / 1e6
         }),
         forbidden_multi_set: median_ms(5, || {
-            bench_forbidden_multi_set(records, army_count) as f64 / 1e6
+            bench_forbidden_multi_set(records, piece_count) as f64 / 1e6
         }),
         occupancy: median_ms(5, || bench_occupancy_inserts(events) as f64 / 1e6),
     }
@@ -160,7 +160,7 @@ fn bench_xy_to_index(def: &GameDefinition, events: &[PlaceEvent]) -> u64 {
     let mut acc = 0u32;
     for event in events {
         let (x, y) = event.xy;
-        for &(dx, dy) in &def.army(event.army_id).piece.valid_moves {
+        for &(dx, dy) in &def.piece(event.piece_id).piece.valid_moves {
             acc = acc.wrapping_add(xy_to_index(x + dx, y + dy));
         }
     }
@@ -178,10 +178,10 @@ fn bench_forbidden_single_set(records: &[(usize, u32)]) -> u64 {
     start.elapsed().as_nanos() as u64
 }
 
-fn bench_forbidden_multi_set(records: &[(usize, u32)], army_count: usize) -> u64 {
+fn bench_forbidden_multi_set(records: &[(usize, u32)], piece_count: usize) -> u64 {
     let start = Instant::now();
     let mut sets: Vec<ForbiddenInsertHarness> =
-        (0..army_count).map(|_| ForbiddenInsertHarness::default()).collect();
+        (0..piece_count).map(|_| ForbiddenInsertHarness::default()).collect();
     for &(target, index) in records {
         sets[target].insert(index);
     }
@@ -193,7 +193,7 @@ fn bench_occupancy_inserts(events: &[PlaceEvent]) -> u64 {
     let start = Instant::now();
     let mut grid = OccupancyInsertHarness::new();
     for (i, event) in events.iter().enumerate() {
-        grid.insert(i as u32, event.army_id);
+        grid.insert(i as u32, event.piece_id);
     }
     black_box(grid.len());
     start.elapsed().as_nanos() as u64
@@ -273,8 +273,8 @@ fn print_fanout_report(
         work.scan_single_step_rejects as f64 / places
     );
     eprintln!(
-        "  graph: {} armies; defenders respecting army0: {}",
-        def.armies.len(),
+        "  graph: {} pieces; defenders respecting piece0: {}",
+        def.pieces.len(),
         threatened_targets(def, 0)
     );
 
@@ -326,7 +326,7 @@ fn print_fanout_report(
     );
     eprintln!(
         "    forbidden OR ({} sets): {:.3} ({:.1}% of place) — matches sim layout",
-        def.armies.len(),
+        def.pieces.len(),
         micro.forbidden_multi_set,
         100.0 * micro.forbidden_multi_set / place_ms
     );
@@ -387,8 +387,8 @@ fn analyze_window(
 
 fn placement_checksum(placements: &[(u32, usize)]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &(index, army_id) in placements {
-        let value = ((index as u64) << 8) ^ army_id as u64;
+    for &(index, piece_id) in placements {
+        let value = ((index as u64) << 8) ^ piece_id as u64;
         hash ^= value;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }

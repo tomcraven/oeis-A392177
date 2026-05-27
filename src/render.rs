@@ -4,7 +4,7 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::CELL_SIZE;
 use crate::model::GameDefinition;
-use crate::model::ArmyId;
+use crate::model::PieceId;
 use crate::sim::{EMPTY_ARMY_SLOT, OccupancyGrid};
 use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
@@ -15,7 +15,7 @@ use crate::viewport::{GridBounds, ViewportState, grid_to_world};
 pub struct RenderAssets {
     pub image: Handle<Image>,
     pub empty_color: [u8; 4],
-    pub army_colors: Vec<[u8; 4]>,
+    pub piece_colors: Vec<[u8; 4]>,
 }
 
 #[derive(Resource, Default)]
@@ -36,7 +36,7 @@ pub fn setup_render_assets(
 ) {
     let handle = images.add(empty_image(1, 1));
     let empty_color = rgba8(Color::srgba(0.12, 0.12, 0.16, 1.0));
-    let army_colors = def.armies.iter().map(|a| rgba8(a.color)).collect();
+    let piece_colors = def.pieces.iter().map(|a| rgba8(a.color)).collect();
     commands.spawn((
         Sprite {
             image: handle.clone(),
@@ -49,19 +49,19 @@ pub fn setup_render_assets(
     commands.insert_resource(RenderAssets {
         image: handle,
         empty_color,
-        army_colors,
+        piece_colors,
     });
 }
 
-pub fn sync_army_materials(
+pub fn sync_piece_materials(
     def: Res<GameDefinition>,
     mut assets: ResMut<RenderAssets>,
     mut cache: ResMut<RenderCache>,
 ) {
-    if !def.is_changed() && assets.army_colors.len() == def.armies.len() {
+    if !def.is_changed() && assets.piece_colors.len() == def.pieces.len() {
         return;
     }
-    assets.army_colors = def.armies.iter().map(|a| rgba8(a.color)).collect();
+    assets.piece_colors = def.pieces.iter().map(|a| rgba8(a.color)).collect();
     cache.rendered_bounds = None;
 }
 
@@ -100,7 +100,7 @@ fn draw_spiral_cells_inner(
     board_q: &mut Query<(&mut Transform, &mut Sprite), With<BoardTexture>>,
     #[cfg(feature = "app_profile")] mut profile_frame: Option<&mut crate::app_profile::AppProfileFrame>,
 ) {
-    if assets.army_colors.is_empty() {
+    if assets.piece_colors.is_empty() {
         return;
     }
     let Some(bounds) = viewport.bounds else {
@@ -128,8 +128,8 @@ fn draw_spiral_cells_inner(
         cache.scratch_rgba.resize(byte_len, 0);
     }
 
-    let army_px: Vec<u32> = assets
-        .army_colors
+    let piece_px: Vec<u32> = assets
+        .piece_colors
         .iter()
         .map(|c| rgba8_to_u32(*c))
         .collect();
@@ -141,7 +141,7 @@ fn draw_spiral_cells_inner(
             width,
             height,
             occupancy,
-            &army_px,
+            &piece_px,
             empty_px,
             colour_mode,
             &mut cache.scratch_rgba,
@@ -204,18 +204,18 @@ pub fn raster_spiral_grid(
     width: u32,
     height: u32,
     occupancy: &OccupancyGrid,
-    army_colors: &[[u8; 4]],
+    piece_colors: &[[u8; 4]],
     empty_color: [u8; 4],
     colour_mode: BoardColourMode,
 ) -> Vec<u8> {
-    let army_px: Vec<u32> = army_colors.iter().map(|c| rgba8_to_u32(*c)).collect();
+    let piece_px: Vec<u32> = piece_colors.iter().map(|c| rgba8_to_u32(*c)).collect();
     let mut data = vec![0u8; (width as usize) * (height as usize) * 4];
     raster_spiral_grid_into(
         bounds,
         width,
         height,
         occupancy,
-        &army_px,
+        &piece_px,
         rgba8_to_u32(empty_color),
         colour_mode,
         &mut data,
@@ -228,7 +228,7 @@ pub fn raster_spiral_grid_into(
     width: u32,
     _height: u32,
     occupancy: &OccupancyGrid,
-    army_colors_u32: &[u32],
+    piece_colors_u32: &[u32],
     empty_pixel: u32,
     colour_mode: BoardColourMode,
     data: &mut [u8],
@@ -236,45 +236,45 @@ pub fn raster_spiral_grid_into(
     fill_rgba_buffer_u32(data, empty_pixel);
 
     match colour_mode {
-        BoardColourMode::Army => {
+        BoardColourMode::Piece => {
             #[cfg(not(target_family = "wasm"))]
             {
-                raster_army_rows_parallel(
+                raster_piece_rows_parallel(
                     bounds,
                     width,
                     occupancy,
-                    army_colors_u32,
+                    piece_colors_u32,
                     data,
                 );
             }
             #[cfg(target_family = "wasm")]
             {
-                raster_army_rows_sequential(bounds, width, occupancy, army_colors_u32, data);
+                raster_piece_rows_sequential(bounds, width, occupancy, piece_colors_u32, data);
             }
         }
     }
 }
 
 #[cfg(target_family = "wasm")]
-fn raster_army_rows_sequential(
+fn raster_piece_rows_sequential(
     bounds: GridBounds,
     width: u32,
     occupancy: &OccupancyGrid,
-    army_colors_u32: &[u32],
+    piece_colors_u32: &[u32],
     data: &mut [u8],
 ) {
     let cells = occupancy.cells_slice();
     for y in bounds.min_y..=bounds.max_y {
-        raster_one_row(y, bounds, width, cells, army_colors_u32, data);
+        raster_one_row(y, bounds, width, cells, piece_colors_u32, data);
     }
 }
 
 #[cfg(not(target_family = "wasm"))]
-fn raster_army_rows_parallel(
+fn raster_piece_rows_parallel(
     bounds: GridBounds,
     width: u32,
     occupancy: &OccupancyGrid,
-    army_colors_u32: &[u32],
+    piece_colors_u32: &[u32],
     data: &mut [u8],
 ) {
     use std::thread;
@@ -301,7 +301,7 @@ fn raster_army_rows_parallel(
             scope.spawn(move || {
                 let data = unsafe { std::slice::from_raw_parts_mut(base_ptr as *mut u8, len) };
                 for y in y_start..=y_end {
-                    raster_one_row(y, bounds, width, cells, army_colors_u32, data);
+                    raster_one_row(y, bounds, width, cells, piece_colors_u32, data);
                 }
             });
         }
@@ -312,8 +312,8 @@ fn raster_one_row(
     y: i32,
     bounds: GridBounds,
     width: u32,
-    cells: &[ArmyId],
-    army_colors_u32: &[u32],
+    cells: &[PieceId],
+    piece_colors_u32: &[u32],
     data: &mut [u8],
 ) {
     let py = (bounds.max_y - y) as u32;
@@ -323,11 +323,11 @@ fn raster_one_row(
 
     for x in bounds.min_x..=bounds.max_x {
         let index = xy_to_index(x, y) as usize;
-        let army_id = match cells.get(index) {
+        let piece_id = match cells.get(index) {
             Some(&id) if id != EMPTY_ARMY_SLOT => id,
             _ => continue,
         };
-        let Some(&px) = army_colors_u32.get(army_id) else {
+        let Some(&px) = piece_colors_u32.get(piece_id) else {
             continue;
         };
         let col = (x - bounds.min_x) as usize;
@@ -444,8 +444,8 @@ mod tests {
         sim.occupancy
     }
 
-    fn army_colors_for(def: &GameDefinition) -> Vec<[u8; 4]> {
-        def.armies.iter().map(|a| rgba8(a.color)).collect()
+    fn piece_colors_for(def: &GameDefinition) -> Vec<[u8; 4]> {
+        def.pieces.iter().map(|a| rgba8(a.color)).collect()
     }
 
     #[test]
@@ -460,7 +460,7 @@ mod tests {
         };
         let size = grid_texture_size(bounds);
         let empty = rgba8(Color::srgba(0.12, 0.12, 0.16, 1.0));
-        let colors = army_colors_for(&def);
+        let colors = piece_colors_for(&def);
         let a = raster_spiral_grid(
             bounds,
             size.x,
@@ -468,7 +468,7 @@ mod tests {
             &occ,
             &colors,
             empty,
-            BoardColourMode::Army,
+            BoardColourMode::Piece,
         );
         let b = raster_spiral_grid(
             bounds,
@@ -477,7 +477,7 @@ mod tests {
             &occ,
             &colors,
             empty,
-            BoardColourMode::Army,
+            BoardColourMode::Piece,
         );
         assert_eq!(raster_checksum(&a), raster_checksum(&b));
         assert_eq!(a, b);
@@ -495,7 +495,7 @@ mod tests {
         };
         let size = grid_texture_size(bounds);
         let empty = rgba8(Color::srgba(0.12, 0.12, 0.16, 1.0));
-        let colors = army_colors_for(&def);
+        let colors = piece_colors_for(&def);
         let iters = 5u32;
         let start = Instant::now();
         for _ in 0..iters {
@@ -506,7 +506,7 @@ mod tests {
                 &occ,
                 &colors,
                 empty,
-                BoardColourMode::Army,
+                BoardColourMode::Piece,
             );
             assert_eq!(data.len(), (size.x * size.y * 4) as usize);
         }
@@ -531,7 +531,7 @@ mod tests {
         };
         let size = grid_texture_size(bounds);
         let empty = rgba8(Color::srgba(0.12, 0.12, 0.16, 1.0));
-        let colors = army_colors_for(&def);
+        let colors = piece_colors_for(&def);
         let start = Instant::now();
         let data = raster_spiral_grid(
             bounds,
@@ -540,7 +540,7 @@ mod tests {
             &occ,
             &colors,
             empty,
-            BoardColourMode::Army,
+            BoardColourMode::Piece,
         );
         let ms = start.elapsed().as_secs_f64() * 1e3;
         assert_eq!(data.len(), (size.x * size.y * 4) as usize);

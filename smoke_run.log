@@ -1,5 +1,0 @@
-2026-05-25T14:30:12.301418Z  INFO bevy_diagnostic::system_information_diagnostics_plugin::internal: SystemInfo { os: "macOS 26.4.1", kernel: "25.4.0", cpu: "Apple M3 Max", core_count: "16", memory: "48.0 GiB" }
-2026-05-25T14:30:12.370495Z  INFO bevy_render::renderer: AdapterInfo { name: "Apple M3 Max", vendor: 0, device: 0, device_type: IntegratedGpu, driver: "", driver_info: "", backend: Metal }
-2026-05-25T14:30:12.403361Z  INFO bevy_render::batching::gpu_preprocessing: GPU preprocessing is fully supported on this device.
-2026-05-25T14:30:12.403410Z  WARN bevy_egui::render: Bindless textures are not yet supported on metal. Disabling bindless mode. See https://github.com/bevyengine/bevy/issues/18149 for more information
-2026-05-25T14:30:12.423861Z  INFO bevy_winit::system: Creating new window Red & Black Knights (0v0)

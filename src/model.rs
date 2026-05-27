@@ -1,6 +1,6 @@
 use bevy::prelude::{Color, Resource};
 
-pub type ArmyId = usize;
+pub type PieceId = usize;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PieceDef {
@@ -190,27 +190,27 @@ impl PieceDef {
 }
 
 #[derive(Clone, Debug)]
-pub struct Army {
+pub struct Piece {
     pub name: String,
     pub color: Color,
     pub piece: PieceDef,
     /// Armies whose pieces block placement on squares they attack.
-    pub blocked_by: Vec<ArmyId>,
-    /// When false, this army does not take placement turns (definition kept in roster).
+    pub blocked_by: Vec<PieceId>,
+    /// When false, this piece does not take placement turns (definition kept in roster).
     pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Resource)]
 pub struct GameDefinition {
-    pub armies: Vec<Army>,
-    /// Round-robin turn order by army index.
-    pub turn_order: Vec<ArmyId>,
+    pub pieces: Vec<Piece>,
+    /// Round-robin turn order by piece index.
+    pub turn_order: Vec<PieceId>,
 }
 
 /// Enabled entries from [`GameDefinition::turn_order`] without building a `Vec`.
 pub struct ActiveTurnOrder<'a> {
     def: &'a GameDefinition,
-    /// Every `turn_order` id is an enabled army — index directly into `turn_order`.
+    /// Every `turn_order` id is an enabled piece — index directly into `turn_order`.
     dense: bool,
 }
 
@@ -220,7 +220,7 @@ impl<'a> ActiveTurnOrder<'a> {
             && def
                 .turn_order
                 .iter()
-                .all(|&id| def.armies.get(id).is_some_and(|a| a.enabled));
+                .all(|&id| def.pieces.get(id).is_some_and(|a| a.enabled));
         Self { def, dense }
     }
 
@@ -242,7 +242,7 @@ impl<'a> ActiveTurnOrder<'a> {
         }
     }
 
-    pub fn get(&self, index: usize) -> Option<ArmyId> {
+    pub fn get(&self, index: usize) -> Option<PieceId> {
         if self.dense {
             self.def.turn_order.get(index).copied()
         } else {
@@ -250,12 +250,12 @@ impl<'a> ActiveTurnOrder<'a> {
         }
     }
 
-    pub fn iter(&self) -> impl Iterator<Item = ArmyId> + '_ {
+    pub fn iter(&self) -> impl Iterator<Item = PieceId> + '_ {
         self.def
             .turn_order
             .iter()
             .copied()
-            .filter(|&id| self.def.armies.get(id).is_some_and(|a| a.enabled))
+            .filter(|&id| self.def.pieces.get(id).is_some_and(|a| a.enabled))
     }
 }
 
@@ -269,24 +269,24 @@ impl GameDefinition {
     /// Whether two definitions would produce the same placement simulation.
     pub fn same_sim_state(&self, other: &Self) -> bool {
         self.turn_order == other.turn_order
-            && self.armies.len() == other.armies.len()
-            && self.armies.iter().zip(&other.armies).all(|(a, b)| {
+            && self.pieces.len() == other.pieces.len()
+            && self.pieces.iter().zip(&other.pieces).all(|(a, b)| {
                 a.piece == b.piece && a.blocked_by == b.blocked_by && a.enabled == b.enabled
             })
     }
 
-    /// Enabled armies in turn order (lazy filter; no allocation on the hot path).
+    /// Enabled pieces in turn order (lazy filter; no allocation on the hot path).
     pub fn active_turn_order(&self) -> ActiveTurnOrder<'_> {
         ActiveTurnOrder::new(self)
     }
 
-    /// Whether sim state and per-army colours match (ignores army names).
+    /// Whether sim state and per-piece colours match (ignores piece names).
     pub fn same_applied_state(&self, other: &Self) -> bool {
         self.same_sim_state(other)
             && self
-                .armies
+                .pieces
                 .iter()
-                .zip(&other.armies)
+                .zip(&other.pieces)
                 .all(|(a, b)| a.color == b.color)
     }
 
@@ -341,20 +341,20 @@ impl GameDefinition {
 
     pub fn wazir_ferz_knight_3_clique() -> Self {
         Self {
-            armies: vec![
-                army(
+            pieces: vec![
+                piece(
                     "wazir_0",
                     Color::srgb(0.35, 0.4, 0.55),
                     PieceDef::wazir(),
                     vec![1, 2],
                 ),
-                army(
+                piece(
                     "ferz_1",
                     Color::srgb(0.75, 0.35, 0.85),
                     PieceDef::ferz(),
                     vec![0, 2],
                 ),
-                army(
+                piece(
                     "knight_2",
                     Color::srgb(0.15, 0.55, 0.35),
                     PieceDef::knight(),
@@ -367,26 +367,26 @@ impl GameDefinition {
 
     pub fn leaper_4_mixed_clique() -> Self {
         Self {
-            armies: vec![
-                army(
+            pieces: vec![
+                piece(
                     "knight_0",
                     Color::srgb(0.2, 0.25, 0.3),
                     PieceDef::knight(),
                     vec![1, 2, 3],
                 ),
-                army(
+                piece(
                     "camel_1",
                     Color::srgb(0.75, 0.45, 0.2),
                     PieceDef::camel(),
                     vec![0, 2, 3],
                 ),
-                army(
+                piece(
                     "zebra_2",
                     Color::srgb(0.25, 0.6, 0.75),
                     PieceDef::zebra(),
                     vec![0, 1, 3],
                 ),
-                army(
+                piece(
                     "giraffe_3",
                     Color::srgb(0.55, 0.75, 0.25),
                     PieceDef::giraffe(),
@@ -425,20 +425,20 @@ impl GameDefinition {
 
     pub fn orthogonal_3_clique() -> Self {
         Self {
-            armies: vec![
-                army(
+            pieces: vec![
+                piece(
                     "wazir_0",
                     Color::srgb(0.4, 0.4, 0.5),
                     PieceDef::wazir(),
                     vec![1, 2],
                 ),
-                army(
+                piece(
                     "dabbaba_1",
                     Color::srgb(0.85, 0.35, 0.3),
                     PieceDef::dabbaba(),
                     vec![0, 2],
                 ),
-                army(
+                piece(
                     "trebuchet_2",
                     Color::srgb(0.3, 0.7, 0.45),
                     PieceDef::trebuchet(),
@@ -534,20 +534,20 @@ impl GameDefinition {
 
     pub fn king_knight_camel_3_weighted_turns() -> Self {
         Self {
-            armies: vec![
-                army(
+            pieces: vec![
+                piece(
                     "king_0",
                     Color::srgb(0.75, 0.7, 0.25),
                     PieceDef::king(),
                     vec![1, 2],
                 ),
-                army(
+                piece(
                     "knight_1",
                     Color::srgb(0.2, 0.3, 0.85),
                     PieceDef::knight(),
                     vec![0],
                 ),
-                army(
+                piece(
                     "camel_2",
                     Color::srgb(0.85, 0.3, 0.35),
                     PieceDef::camel(),
@@ -579,32 +579,32 @@ impl GameDefinition {
 
     pub fn leaper_5_mixed_clique() -> Self {
         Self {
-            armies: vec![
-                army(
+            pieces: vec![
+                piece(
                     "knight_0",
                     Color::srgb(0.2, 0.25, 0.3),
                     PieceDef::knight(),
                     all_but(0, 5),
                 ),
-                army(
+                piece(
                     "camel_1",
                     Color::srgb(0.75, 0.45, 0.2),
                     PieceDef::camel(),
                     all_but(1, 5),
                 ),
-                army(
+                piece(
                     "zebra_2",
                     Color::srgb(0.25, 0.6, 0.75),
                     PieceDef::zebra(),
                     all_but(2, 5),
                 ),
-                army(
+                piece(
                     "giraffe_3",
                     Color::srgb(0.55, 0.75, 0.25),
                     PieceDef::giraffe(),
                     all_but(3, 5),
                 ),
-                army(
+                piece(
                     "hippogriff_4",
                     Color::srgb(0.5, 0.15, 0.65),
                     PieceDef::hippogriff(),
@@ -615,36 +615,36 @@ impl GameDefinition {
         }
     }
 
-    pub fn army(&self, id: ArmyId) -> &Army {
-        &self.armies[id]
+    pub fn piece(&self, id: PieceId) -> &Piece {
+        &self.pieces[id]
     }
 
-    /// Append a new army using a catalog piece; default name `{label}_{id}`.
-    /// `blocked_by` is wired to every other army (same as clique presets).
-    pub fn push_army_from_piece_preset(
+    /// Append a new piece using a catalog piece; default name `{label}_{id}`.
+    /// `blocked_by` is wired to every other piece (same as clique presets).
+    pub fn push_piece_from_piece_preset(
         &mut self,
         preset_label: &str,
-        piece: PieceDef,
+        piece_def: PieceDef,
         color: Color,
     ) {
-        let id = self.armies.len();
+        let id = self.pieces.len();
         let n = id + 1;
-        for army in &mut self.armies {
-            if !army.blocked_by.contains(&id) {
-                army.blocked_by.push(id);
+        for piece in &mut self.pieces {
+            if !piece.blocked_by.contains(&id) {
+                piece.blocked_by.push(id);
             }
         }
-        self.armies.push(army(
+        self.pieces.push(piece(
             &format!("{preset_label}_{id}"),
             color,
-            piece,
+            piece_def,
             all_but(id, n),
         ));
         self.turn_order.push(id);
     }
 
-    /// Distinct army colour for roster slot `index` (same palette as clique presets).
-    pub fn default_army_color(index: usize) -> Color {
+    /// Distinct piece colour for roster slot `index` (same palette as clique presets).
+    pub fn default_piece_color(index: usize) -> Color {
         hue(index, index + 1)
     }
 
@@ -703,14 +703,14 @@ impl GameDefinition {
     }
 }
 
-fn clique(label: &str, piece: PieceDef, n: usize) -> GameDefinition {
+fn clique(label: &str, piece_def: PieceDef, n: usize) -> GameDefinition {
     GameDefinition {
-        armies: (0..n)
+        pieces: (0..n)
             .map(|i| {
-                army(
+                piece(
                     &format!("{label}_{i}"),
                     hue(i, n),
-                    piece.clone(),
+                    piece_def.clone(),
                     all_but(i, n),
                 )
             })
@@ -728,25 +728,25 @@ fn pairwise(
     color_b: Color,
 ) -> GameDefinition {
     GameDefinition {
-        armies: vec![
-            army(label_a, color_a, piece_a, vec![1]),
-            army(label_b, color_b, piece_b, vec![0]),
+        pieces: vec![
+            piece(label_a, color_a, piece_a, vec![1]),
+            piece(label_b, color_b, piece_b, vec![0]),
         ],
         turn_order: vec![0, 1],
     }
 }
 
-fn army(name: &str, color: Color, piece: PieceDef, blocked_by: Vec<ArmyId>) -> Army {
-    Army {
+fn piece(name: &str, color: Color, piece_def: PieceDef, blocked_by: Vec<PieceId>) -> Piece {
+    Piece {
         name: name.into(),
         color,
-        piece,
+        piece: piece_def,
         blocked_by,
         enabled: true,
     }
 }
 
-fn all_but(i: ArmyId, n: usize) -> Vec<ArmyId> {
+fn all_but(i: PieceId, n: usize) -> Vec<PieceId> {
     (0..n).filter(|&j| j != i).collect()
 }
 

@@ -117,7 +117,7 @@ mod threaded {
                 return false;
             }
             self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
-                def.armies
+                def.pieces
                     .get(id)
                     .is_some_and(|a| a.enabled && cursor <= target_index)
             })
@@ -355,7 +355,7 @@ impl SimulationBridge {
             return false;
         }
         self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
-            def.armies
+            def.pieces
                 .get(id)
                 .is_some_and(|a| a.enabled && cursor <= target_index)
         })

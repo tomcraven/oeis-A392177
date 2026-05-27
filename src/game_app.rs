@@ -19,7 +19,7 @@ use crate::model::GameDefinition;
 use crate::perf_harness::{
     self, perf_harness_advance_script, perf_harness_exit_when_done, setup_perf_harness,
 };
-use crate::render::{RenderCache, draw_spiral_cells, setup_render_assets, sync_army_materials};
+use crate::render::{RenderCache, draw_spiral_cells, setup_render_assets, sync_piece_materials};
 use crate::sim_worker::SimulationBridge;
 use crate::ui::{UiState, ui_game_definition};
 use crate::viewport::{
@@ -98,7 +98,7 @@ pub fn configure_app(app: &mut App) {
         Update,
         (
             camera::apply_camera_actions,
-            sync_army_materials,
+            sync_piece_materials,
             smoke_test_exit,
             perf_harness_exit_when_done,
         )

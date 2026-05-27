@@ -11,7 +11,7 @@ use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
 use crate::game_snapshot::DiscoverRunConfig;
-use crate::model::{ArmyId, GameDefinition};
+use crate::model::{PieceId, GameDefinition};
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::grid_texture_size;
 use crate::sim::Simulation;
@@ -91,11 +91,11 @@ impl From<GridBoundsSerde> for GridBounds {
 
 /// Sample generator knobs for automated discovery (distinct from UI defaults).
 pub fn sample_random_gen_config(rng: &mut impl Rng) -> RandomGenConfig {
-    let army_min = rng.random_range(2u32..=4);
-    let army_max = rng.random_range(army_min..=7);
+    let piece_min = rng.random_range(2u32..=4);
+    let piece_max = rng.random_range(piece_min..=7);
     RandomGenConfig {
-        army_count_min: army_min,
-        army_count_max: army_max,
+        piece_count_min: piece_min,
+        piece_count_max: piece_max,
         attack_radius_min: rng.random_range(1..=2),
         attack_radius_max: rng.random_range(2..=5),
         pattern_density: rng.random_range(0.18..=0.55),
@@ -126,7 +126,7 @@ pub fn spec_for_iteration(
     }
 }
 
-fn max_placement_index(placements: &[(u32, ArmyId)]) -> u32 {
+fn max_placement_index(placements: &[(u32, PieceId)]) -> u32 {
     placements.iter().map(|&(index, _)| index).max().unwrap_or(0)
 }
 
@@ -311,7 +311,7 @@ pub fn rerender_saved_run(run_dir: &Path, cell_pixel_scale: u32) -> std::io::Res
     write_run_outputs(run_dir, &config, &def, &sim, &meta, cell_pixel_scale)
 }
 
-pub fn bounds_from_placements(placements: &[(u32, ArmyId)], padding: i32) -> GridBounds {
+pub fn bounds_from_placements(placements: &[(u32, PieceId)], padding: i32) -> GridBounds {
     if placements.is_empty() {
         return GridBounds {
             min_x: -padding,
@@ -371,7 +371,7 @@ pub fn write_board_png(
 pub struct BoardPngRaster {
     bounds: GridBounds,
     occupancy: crate::sim::OccupancyGrid,
-    army_colors: Vec<[u8; 4]>,
+    piece_colors: Vec<[u8; 4]>,
     cell_pixel_scale: u32,
     width: u32,
     height: u32,
@@ -402,7 +402,7 @@ impl BoardPngRaster {
         Ok(Self {
             bounds,
             occupancy: occupancy.clone(),
-            army_colors: def.armies.iter().map(|a| rgba8(a.color)).collect(),
+            piece_colors: def.pieces.iter().map(|a| rgba8(a.color)).collect(),
             cell_pixel_scale,
             width,
             height,
@@ -431,9 +431,9 @@ impl BoardPngRaster {
             for x in self.bounds.min_x..=self.bounds.max_x {
                 let px = (x - self.bounds.min_x) as u32;
                 let index = crate::spiral::xy_to_index(x, y);
-                let color = if let Some(army_id) = self.occupancy.get(&index) {
-                    self.army_colors
-                        .get(*army_id)
+                let color = if let Some(piece_id) = self.occupancy.get(&index) {
+                    self.piece_colors
+                        .get(*piece_id)
                         .copied()
                         .unwrap_or(EMPTY_RGBA)
                 } else {
@@ -508,7 +508,7 @@ fn raster_board_rgba(
     let grid_size = grid_texture_size(bounds);
     let width = grid_size.x;
     let height = grid_size.y;
-    let army_colors: Vec<[u8; 4]> = def.armies.iter().map(|a| rgba8(a.color)).collect();
+    let piece_colors: Vec<[u8; 4]> = def.pieces.iter().map(|a| rgba8(a.color)).collect();
 
     let mut data = vec![0u8; (width * height * 4) as usize];
     for y in bounds.min_y..=bounds.max_y {
@@ -516,9 +516,9 @@ fn raster_board_rgba(
         for x in bounds.min_x..=bounds.max_x {
             let px = (x - bounds.min_x) as u32;
             let index = crate::spiral::xy_to_index(x, y);
-            let color = if let Some(army_id) = occupancy.get(&index) {
-                army_colors
-                    .get(*army_id)
+            let color = if let Some(piece_id) = occupancy.get(&index) {
+                piece_colors
+                    .get(*piece_id)
                     .copied()
                     .unwrap_or(EMPTY_RGBA)
             } else {
@@ -544,10 +544,10 @@ fn raster_board_rgba(
     })
 }
 
-fn placement_checksum(placements: &[(u32, ArmyId)]) -> u64 {
+fn placement_checksum(placements: &[(u32, PieceId)]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &(index, army_id) in placements {
-        let value = ((index as u64) << 8) ^ army_id as u64;
+    for &(index, piece_id) in placements {
+        let value = ((index as u64) << 8) ^ piece_id as u64;
         hash ^= value;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
@@ -590,8 +590,8 @@ mod tests {
     fn write_png_roundtrip_smoke() {
         let spec = DiscoverRunSpec {
             random_gen: RandomGenConfig {
-                army_count_min: 2,
-                army_count_max: 2,
+                piece_count_min: 2,
+                piece_count_max: 2,
                 attack_radius_min: 1,
                 attack_radius_max: 2,
                 pattern_density: 0.5,
@@ -613,7 +613,7 @@ mod tests {
         assert!(dir.join("config.toml").is_file());
         let loaded: DiscoverRunConfig =
             toml::from_str(&fs::read_to_string(dir.join("config.toml")).unwrap()).unwrap();
-        assert_eq!(loaded.game.armies.len(), def.armies.len());
+        assert_eq!(loaded.game.pieces.len(), def.pieces.len());
         let _ = fs::remove_dir_all(&dir);
     }
 

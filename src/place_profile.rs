@@ -222,7 +222,7 @@ pub fn add_place_total_ns(n: u64) {
     TIMING.with(|t| t.borrow_mut().place_total_ns += n);
 }
 
-// `(target_army, spiral_index)` for each `forbid_index` call.
+// `(target_piece, spiral_index)` for each `forbid_index` call.
 thread_local! {
     static FORBIDDEN_RECORDS: RefCell<Vec<(usize, u32)>> = RefCell::new(Vec::new());
 }
@@ -231,11 +231,11 @@ pub fn clear_forbidden_records() {
     FORBIDDEN_RECORDS.with(|s| s.borrow_mut().clear());
 }
 
-pub fn push_forbidden_record(target_army: usize, index: u32) {
+pub fn push_forbidden_record(target_piece: usize, index: u32) {
     if !profiling_enabled() {
         return;
     }
-    FORBIDDEN_RECORDS.with(|s| s.borrow_mut().push((target_army, index)));
+    FORBIDDEN_RECORDS.with(|s| s.borrow_mut().push((target_piece, index)));
 }
 
 pub fn take_forbidden_records() -> Vec<(usize, u32)> {
@@ -273,13 +273,13 @@ impl OccupancyInsertHarness {
         }
     }
 
-    pub fn insert(&mut self, index: u32, army_id: usize) {
+    pub fn insert(&mut self, index: u32, piece_id: usize) {
         const EMPTY: usize = usize::MAX;
         let index = index as usize;
         if index >= self.cells.len() {
             self.cells.resize(index + 1, EMPTY);
         }
-        self.cells[index] = army_id;
+        self.cells[index] = piece_id;
     }
 
     pub fn len(&self) -> usize {

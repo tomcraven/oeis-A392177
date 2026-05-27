@@ -4,7 +4,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::game_snapshot::SavedColor;
-use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
+use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
 
 /// Mirror attack cells around the piece (vertical = left/right, horizontal = up/down).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -35,8 +35,8 @@ impl AttackSymmetry {
 /// Settings for the “Generate random attacks” action in the UI (blob attack patterns).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RandomGenConfig {
-    pub army_count_min: u32,
-    pub army_count_max: u32,
+    pub piece_count_min: u32,
+    pub piece_count_max: u32,
     /// Chebyshev distance from the piece: minimum ring included when sampling attack cells.
     pub attack_radius_min: i32,
     /// Chebyshev distance from the piece: maximum ring included when sampling attack cells.
@@ -52,8 +52,8 @@ pub struct RandomGenConfig {
 impl Default for RandomGenConfig {
     fn default() -> Self {
         Self {
-            army_count_min: 2,
-            army_count_max: 3,
+            piece_count_min: 2,
+            piece_count_max: 3,
             attack_radius_min: 2,
             attack_radius_max: 3,
             pattern_density: 0.17,
@@ -65,11 +65,11 @@ impl Default for RandomGenConfig {
 
 impl RandomGenConfig {
     pub fn sanitize(&mut self) {
-        if self.army_count_max < self.army_count_min {
-            std::mem::swap(&mut self.army_count_min, &mut self.army_count_max);
+        if self.piece_count_max < self.piece_count_min {
+            std::mem::swap(&mut self.piece_count_min, &mut self.piece_count_max);
         }
-        self.army_count_min = self.army_count_min.max(1);
-        self.army_count_max = self.army_count_max.max(self.army_count_min);
+        self.piece_count_min = self.piece_count_min.max(1);
+        self.piece_count_max = self.piece_count_max.max(self.piece_count_min);
         if self.attack_radius_max < self.attack_radius_min {
             std::mem::swap(&mut self.attack_radius_min, &mut self.attack_radius_max);
         }
@@ -79,7 +79,7 @@ impl RandomGenConfig {
     }
 }
 
-/// One army slot when generating from the piece catalog: fixed piece or random catalog entry.
+/// One piece slot when generating from the piece catalog: fixed piece or random catalog entry.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RandomPieceSlot {
     #[serde(default)]
@@ -95,7 +95,7 @@ pub struct RandomPieceSlot {
 }
 
 fn default_random_slot_color() -> SavedColor {
-    SavedColor::from_bevy(GameDefinition::default_army_color(0))
+    SavedColor::from_bevy(GameDefinition::default_piece_color(0))
 }
 
 impl Default for RandomPieceSlot {
@@ -112,7 +112,7 @@ impl Default for RandomPieceSlot {
 impl RandomPieceSlot {
     pub fn with_default_color(index: usize) -> Self {
         Self {
-            color: SavedColor::from_bevy(GameDefinition::default_army_color(index)),
+            color: SavedColor::from_bevy(GameDefinition::default_piece_color(index)),
             ..Self::default()
         }
     }
@@ -131,13 +131,13 @@ fn default_random_piece_slots() -> Vec<RandomPieceSlot> {
             locked: true,
             random_attack: false,
             catalog_index: 0,
-            color: SavedColor::from_bevy(GameDefinition::default_army_color(0)),
+            color: SavedColor::from_bevy(GameDefinition::default_piece_color(0)),
         },
         RandomPieceSlot {
             locked: false,
             random_attack: false,
             catalog_index: 0,
-            color: SavedColor::from_bevy(GameDefinition::default_army_color(1)),
+            color: SavedColor::from_bevy(GameDefinition::default_piece_color(1)),
         },
     ]
 }
@@ -191,7 +191,7 @@ pub fn generate_random_pieces_game(
         None
     };
 
-    let armies: Vec<Army> = cfg
+    let pieces: Vec<Piece> = cfg
         .slots
         .iter()
         .enumerate()
@@ -217,8 +217,8 @@ pub fn generate_random_pieces_game(
                 let (label, factory) = catalog[catalog_index];
                 (label.to_string(), factory())
             };
-            let blocked_by = all_other_armies(i, n);
-            Army {
+            let blocked_by = all_other_pieces(i, n);
+            Piece {
                 name,
                 color: slot.color.to_bevy(),
                 piece,
@@ -228,11 +228,11 @@ pub fn generate_random_pieces_game(
         })
         .collect();
 
-    let mut turn_order: Vec<ArmyId> = (0..n).collect();
+    let mut turn_order: Vec<PieceId> = (0..n).collect();
     turn_order.shuffle(rng);
 
     GameDefinition {
-        armies,
+        pieces,
         turn_order,
     }
 }
@@ -241,13 +241,13 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
     let mut cfg = config.clone();
     cfg.sanitize();
 
-    let n = if cfg.army_count_min == cfg.army_count_max {
-        cfg.army_count_min as usize
+    let n = if cfg.piece_count_min == cfg.piece_count_max {
+        cfg.piece_count_min as usize
     } else {
-        rng.random_range(cfg.army_count_min..=cfg.army_count_max) as usize
+        rng.random_range(cfg.piece_count_min..=cfg.piece_count_max) as usize
     };
 
-    let colors = random_army_palette(rng, n);
+    let colors = random_piece_palette(rng, n);
 
     let shared_moves = if cfg.identical_pieces {
         Some(random_attack_pattern(
@@ -261,7 +261,7 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
         None
     };
 
-    let armies: Vec<Army> = (0..n)
+    let pieces: Vec<Piece> = (0..n)
         .map(|i| {
             let valid_moves = if let Some(moves) = &shared_moves {
                 moves.clone()
@@ -275,8 +275,8 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
                 )
             };
             let piece = PieceDef { valid_moves };
-            let blocked_by = all_other_armies(i, n);
-            Army {
+            let blocked_by = all_other_pieces(i, n);
+            Piece {
                 name: format!("Piece {i}"),
                 color: colors[i],
                 piece,
@@ -286,11 +286,11 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
         })
         .collect();
 
-    let mut turn_order: Vec<ArmyId> = (0..n).collect();
+    let mut turn_order: Vec<PieceId> = (0..n).collect();
     turn_order.shuffle(rng);
 
     GameDefinition {
-        armies,
+        pieces,
         turn_order,
     }
 }
@@ -384,11 +384,11 @@ fn normalize_moves(moves: &mut Vec<(i32, i32)>) {
     moves.dedup();
 }
 
-fn all_other_armies(army: ArmyId, n: usize) -> Vec<ArmyId> {
-    (0..n).filter(|&other| other != army).collect()
+fn all_other_pieces(piece: PieceId, n: usize) -> Vec<PieceId> {
+    (0..n).filter(|&other| other != piece).collect()
 }
 
-fn random_army_palette(rng: &mut impl Rng, n: usize) -> Vec<Color> {
+fn random_piece_palette(rng: &mut impl Rng, n: usize) -> Vec<Color> {
     if n == 0 {
         return Vec::new();
     }
@@ -484,10 +484,10 @@ mod tests {
     use rand::rngs::StdRng;
 
     #[test]
-    fn sanitized_config_produces_stable_army_count_bounds() {
+    fn sanitized_config_produces_stable_piece_count_bounds() {
         let mut cfg = RandomGenConfig {
-            army_count_min: 8,
-            army_count_max: 2,
+            piece_count_min: 8,
+            piece_count_max: 2,
             attack_radius_min: 5,
             attack_radius_max: 1,
             pattern_density: 2.0,
@@ -495,8 +495,8 @@ mod tests {
             identical_pieces: false,
         };
         cfg.sanitize();
-        assert_eq!(cfg.army_count_min, 2);
-        assert_eq!(cfg.army_count_max, 8);
+        assert_eq!(cfg.piece_count_min, 2);
+        assert_eq!(cfg.piece_count_max, 8);
         assert_eq!(cfg.attack_radius_min, 1);
         assert_eq!(cfg.attack_radius_max, 5);
         assert_eq!(cfg.pattern_density, 1.0);
@@ -547,8 +547,8 @@ mod tests {
         }
 
         let cfg = RandomGenConfig {
-            army_count_min: 1,
-            army_count_max: 1,
+            piece_count_min: 1,
+            piece_count_max: 1,
             attack_radius_min: 1,
             attack_radius_max: 4,
             pattern_density: 0.2,
@@ -561,7 +561,7 @@ mod tests {
         let trials = 400usize;
         for _ in 0..trials {
             let def = generate_random_game(&cfg, &mut rng);
-            filled += def.armies[0].piece.valid_moves.len();
+            filled += def.pieces[0].piece.valid_moves.len();
         }
         let ratio = filled as f32 / (trials * eligible) as f32;
         assert!(
@@ -571,10 +571,10 @@ mod tests {
     }
 
     #[test]
-    fn random_palette_has_one_color_per_army() {
+    fn random_palette_has_one_color_per_piece() {
         let mut rng = StdRng::seed_from_u64(99);
         for n in 2..=8 {
-            let colors = random_army_palette(&mut rng, n);
+            let colors = random_piece_palette(&mut rng, n);
             assert_eq!(colors.len(), n);
         }
     }
@@ -582,8 +582,8 @@ mod tests {
     #[test]
     fn identical_pieces_share_attack_pattern() {
         let cfg = RandomGenConfig {
-            army_count_min: 4,
-            army_count_max: 4,
+            piece_count_min: 4,
+            piece_count_max: 4,
             attack_radius_min: 2,
             attack_radius_max: 3,
             pattern_density: 0.25,
@@ -592,18 +592,18 @@ mod tests {
         };
         let mut rng = StdRng::seed_from_u64(123);
         let def = generate_random_game(&cfg, &mut rng);
-        assert_eq!(def.armies.len(), 4);
-        let first = &def.armies[0].piece.valid_moves;
-        for army in &def.armies[1..] {
-            assert_eq!(&army.piece.valid_moves, first);
+        assert_eq!(def.pieces.len(), 4);
+        let first = &def.pieces[0].piece.valid_moves;
+        for piece in &def.pieces[1..] {
+            assert_eq!(&piece.piece.valid_moves, first);
         }
     }
 
     #[test]
     fn generate_respects_count_and_move_radius() {
         let cfg = RandomGenConfig {
-            army_count_min: 3,
-            army_count_max: 3,
+            piece_count_min: 3,
+            piece_count_max: 3,
             attack_radius_min: 2,
             attack_radius_max: 2,
             pattern_density: 1.0,
@@ -612,13 +612,13 @@ mod tests {
         };
         let mut rng = StdRng::seed_from_u64(42);
         let def = generate_random_game(&cfg, &mut rng);
-        assert_eq!(def.armies.len(), 3);
-        for (i, army) in def.armies.iter().enumerate() {
-            assert!(!army.piece.valid_moves.is_empty());
-            for &(x, y) in &army.piece.valid_moves {
+        assert_eq!(def.pieces.len(), 3);
+        for (i, piece) in def.pieces.iter().enumerate() {
+            assert!(!piece.piece.valid_moves.is_empty());
+            for &(x, y) in &piece.piece.valid_moves {
                 assert_eq!(chebyshev(x, y), 2);
             }
-            assert_eq!(army.blocked_by, all_other_armies(i, 3));
+            assert_eq!(piece.blocked_by, all_other_pieces(i, 3));
         }
     }
 
@@ -642,8 +642,8 @@ mod tests {
         let mut rng = StdRng::seed_from_u64(7);
         let attack_cfg = RandomGenConfig::default();
         let def = generate_random_pieces_game(&cfg, &attack_cfg, &mut rng);
-        assert_eq!(def.armies.len(), 2);
-        assert_eq!(def.armies[0].piece, knight);
-        assert_eq!(def.armies[0].name, "knight");
+        assert_eq!(def.pieces.len(), 2);
+        assert_eq!(def.pieces[0].piece, knight);
+        assert_eq!(def.pieces[0].name, "knight");
     }
 }

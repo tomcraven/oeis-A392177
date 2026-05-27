@@ -162,7 +162,7 @@ mod tests {
                 zoom: 3.0,
             },
             target_index: 99_999,
-            board_colour_mode: BoardColourMode::Army,
+            board_colour_mode: BoardColourMode::Piece,
         });
         let code = encode_share_code(&snap).unwrap();
         assert!(code.starts_with("rbk:1:"));

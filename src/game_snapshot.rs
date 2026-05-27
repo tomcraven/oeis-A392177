@@ -1,7 +1,7 @@
 use bevy::prelude::Color;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
+use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedColor {
@@ -16,7 +16,7 @@ pub struct SavedArmy {
     pub name: String,
     pub color: SavedColor,
     pub valid_moves: Vec<[i32; 2]>,
-    pub blocked_by: Vec<ArmyId>,
+    pub blocked_by: Vec<PieceId>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
 }
@@ -27,11 +27,11 @@ fn default_enabled() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedGameDefinition {
-    pub armies: Vec<SavedArmy>,
-    pub turn_order: Vec<ArmyId>,
+    pub pieces: Vec<SavedArmy>,
+    pub turn_order: Vec<PieceId>,
 }
 
-/// Authoritative discover preset: exact armies + sim depth (written to `config.toml`).
+/// Authoritative discover preset: exact pieces + sim depth (written to `config.toml`).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct DiscoverRunConfig {
     pub game: SavedGameDefinition,
@@ -44,8 +44,8 @@ pub struct DiscoverRunConfig {
 impl SavedGameDefinition {
     pub fn from_game(def: &GameDefinition) -> Self {
         Self {
-            armies: def
-                .armies
+            pieces: def
+                .pieces
                 .iter()
                 .map(|a| SavedArmy {
                     name: a.name.clone(),
@@ -84,10 +84,10 @@ impl SavedColor {
 impl From<SavedGameDefinition> for GameDefinition {
     fn from(saved: SavedGameDefinition) -> Self {
         GameDefinition {
-            armies: saved
-                .armies
+            pieces: saved
+                .pieces
                 .into_iter()
-                .map(|a| Army {
+                .map(|a| Piece {
                     name: a.name,
                     color: a.color.to_bevy(),
                     piece: PieceDef {

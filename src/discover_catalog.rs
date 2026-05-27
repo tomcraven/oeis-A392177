@@ -1,10 +1,10 @@
 use bevy::prelude::Color;
 
-use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
+use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
 
 const N_PIECES: usize = 16;
 const N_PAIRWISE: usize = N_PIECES * N_PIECES;
-const N_CLIQUE_SIZES: usize = 4; // armies 2..=5
+const N_CLIQUE_SIZES: usize = 4; // pieces 2..=5
 const N_SAME_CLIQUES: usize = N_PIECES * N_CLIQUE_SIZES;
 const N_MIXED: usize = 12;
 
@@ -188,14 +188,14 @@ fn pairwise_pieces(
     piece_b: PieceDef,
 ) -> GameDefinition {
     GameDefinition {
-        armies: vec![
-            army(
+        pieces: vec![
+            piece(
                 &format!("{label_a}_0"),
                 Color::srgb(0.18, 0.2, 0.28),
                 piece_a,
                 vec![1],
             ),
-            army(
+            piece(
                 &format!("{label_b}_1"),
                 Color::srgb(0.88, 0.14, 0.12),
                 piece_b,
@@ -206,14 +206,14 @@ fn pairwise_pieces(
     }
 }
 
-fn clique_pieces(label: &str, piece: PieceDef, n: usize) -> GameDefinition {
+fn clique_pieces(label: &str, piece_def: PieceDef, n: usize) -> GameDefinition {
     GameDefinition {
-        armies: (0..n)
+        pieces: (0..n)
             .map(|i| {
-                army(
+                piece(
                     &format!("{label}_{i}"),
                     hue(i, n),
-                    piece.clone(),
+                    piece_def.clone(),
                     all_but(i, n),
                 )
             })
@@ -229,9 +229,9 @@ fn mixed_clique(names: [&'static str; 3]) -> GameDefinition {
         piece_by_name(names[2]).1(),
     ];
     GameDefinition {
-        armies: (0..3)
+        pieces: (0..3)
             .map(|i| {
-                army(
+                piece(
                     &format!("{}_{i}", names[i]),
                     hue(i, 3),
                     pieces[i].clone(),
@@ -251,17 +251,17 @@ fn piece_by_name(name: &str) -> (&'static str, fn() -> PieceDef) {
         .unwrap_or(("knight", PieceDef::knight))
 }
 
-fn army(name: &str, color: Color, piece: PieceDef, blocked_by: Vec<ArmyId>) -> Army {
-    Army {
+fn piece(name: &str, color: Color, piece_def: PieceDef, blocked_by: Vec<PieceId>) -> Piece {
+    Piece {
         name: name.into(),
         color,
-        piece,
+        piece: piece_def,
         blocked_by,
         enabled: true,
     }
 }
 
-fn all_but(i: ArmyId, n: usize) -> Vec<ArmyId> {
+fn all_but(i: PieceId, n: usize) -> Vec<PieceId> {
     (0..n).filter(|&j| j != i).collect()
 }
 
@@ -284,8 +284,8 @@ mod tests {
             })
             .unwrap();
         let def = game_at(idx).unwrap();
-        assert_eq!(def.armies.len(), 2);
-        assert_eq!(def.armies[0].piece, PieceDef::knight());
+        assert_eq!(def.pieces.len(), 2);
+        assert_eq!(def.pieces[0].piece, PieceDef::knight());
     }
 
     #[test]

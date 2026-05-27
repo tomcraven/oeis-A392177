@@ -89,7 +89,7 @@ fn bench_case(
         41,
         255,
     ];
-    let colors: Vec<[u8; 4]> = def.armies.iter().map(|a| rgba8_for_tests_from(a.color)).collect();
+    let colors: Vec<[u8; 4]> = def.pieces.iter().map(|a| rgba8_for_tests_from(a.color)).collect();
 
     for _ in 0..WARMUP {
         let data = raster_spiral_grid(
@@ -99,7 +99,7 @@ fn bench_case(
             &sim.occupancy,
             &colors,
             empty,
-            BoardColourMode::Army,
+            BoardColourMode::Piece,
         );
         std::hint::black_box(data);
     }
@@ -115,7 +115,7 @@ fn bench_case(
             &sim.occupancy,
             &colors,
             empty,
-            BoardColourMode::Army,
+            BoardColourMode::Piece,
         );
         samples.push(start.elapsed());
         last_checksum = raster_checksum(&data);

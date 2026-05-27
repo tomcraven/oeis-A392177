@@ -10,10 +10,10 @@ use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
 #[cfg(not(target_family = "wasm"))]
 use crate::CELL_SIZE;
-use crate::model::{Army, GameDefinition, PieceDef};
+use crate::model::{Piece, GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
-    shared_attack_extent_for_armies, shift_attacks, toggle_random_attack_square,
+    shared_attack_extent_for_pieces, shift_attacks, toggle_random_attack_square,
     toggle_random_blocked_by,
 };
 use crate::random_gen::{
@@ -30,7 +30,7 @@ use crate::viewport::{self, ViewportState};
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
 pub enum BoardColourMode {
     #[default]
-    Army,
+    Piece,
 }
 
 impl<'de> Deserialize<'de> for BoardColourMode {
@@ -39,7 +39,7 @@ impl<'de> Deserialize<'de> for BoardColourMode {
         D: serde::Deserializer<'de>,
     {
         let _ = String::deserialize(deserializer)?;
-        Ok(Self::Army)
+        Ok(Self::Piece)
     }
 }
 
@@ -78,19 +78,19 @@ pub struct UiState {
     pub random_gen: RandomGenConfig,
     pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
-    pub mutate_army: usize,
+    pub mutate_piece: usize,
     pub mutate_all: bool,
     pub preset_index: usize,
     /// Piece shown in the nested Advanced editor under Pieces.
-    pub edit_army: usize,
+    pub edit_piece: usize,
     /// When true, attack-square grid toggles apply to every piece in the set.
     pub sync_attack_squares: bool,
     /// Name for the next custom bookmark (Library section).
     pub bookmark_new_name: String,
     /// Selected entry in [`PieceDef::piece_catalog`] for roster add.
     pub add_piece_preset_index: usize,
-    /// Army index targeted by roster remove control.
-    pub roster_remove_army: usize,
+    /// Piece index targeted by roster remove control.
+    pub roster_remove_piece: usize,
     /// Colour applied when adding a piece from Edit roster.
     pub add_piece_color: Color,
     pub sidebar: SidebarSections,
@@ -113,15 +113,15 @@ impl Default for UiState {
             board_colour_mode: BoardColourMode::default(),
             random_gen: RandomGenConfig::default(),
             random_pieces_config: RandomPiecesConfig::default(),
-            mutate_army: 0,
+            mutate_piece: 0,
             mutate_all: false,
             preset_index: 0,
-            edit_army: 0,
+            edit_piece: 0,
             sync_attack_squares: false,
             bookmark_new_name: String::new(),
             add_piece_preset_index: 0,
-            roster_remove_army: 0,
-            add_piece_color: GameDefinition::default_army_color(0),
+            roster_remove_piece: 0,
+            add_piece_color: GameDefinition::default_piece_color(0),
             sidebar: SidebarSections::default(),
             export_status: None,
             share_code_input: String::new(),
@@ -683,7 +683,7 @@ pub fn ui_game_definition(
                             let prev = ui_state.board_colour_mode;
                             ui.radio_value(
                                 &mut ui_state.board_colour_mode,
-                                BoardColourMode::Army,
+                                BoardColourMode::Piece,
                                 "Piece colour",
                             );
                             if ui_state.board_colour_mode != prev {
@@ -704,8 +704,8 @@ pub fn ui_game_definition(
                             sidebar_u32_range(
                                 ui,
                                 "Piece count",
-                                &mut rg.army_count_min,
-                                &mut rg.army_count_max,
+                                &mut rg.piece_count_min,
+                                &mut rg.piece_count_max,
                                 1..=32,
                                 None,
                             );
@@ -902,21 +902,21 @@ pub fn ui_game_definition(
                         ui_state.sidebar.mutate,
                         false,
                         |ui| {
-                        if draft.armies.is_empty() {
+                        if draft.pieces.is_empty() {
                             ui.label("No pieces");
                         } else {
                             if !ui_state.mutate_all
-                                && ui_state.mutate_army >= draft.armies.len()
+                                && ui_state.mutate_piece >= draft.pieces.len()
                             {
-                                ui_state.mutate_army = draft.armies.len().saturating_sub(1);
+                                ui_state.mutate_piece = draft.pieces.len().saturating_sub(1);
                             }
                             let selected = if ui_state.mutate_all {
                                 "All".to_string()
                             } else {
-                                let a = ui_state.mutate_army;
-                                format!("{}: {}", a, draft.armies[a].name)
+                                let a = ui_state.mutate_piece;
+                                format!("{}: {}", a, draft.pieces[a].name)
                             };
-                            egui::ComboBox::from_id_salt("mutate_army_pick")
+                            egui::ComboBox::from_id_salt("mutate_piece_pick")
                                 .selected_text(selected)
                                 .show_ui(ui, |ui| {
                                     if ui
@@ -925,32 +925,32 @@ pub fn ui_game_definition(
                                     {
                                         ui_state.mutate_all = true;
                                     }
-                                    for (aid, army) in draft.armies.iter().enumerate() {
+                                    for (aid, piece) in draft.pieces.iter().enumerate() {
                                         let picked = !ui_state.mutate_all
-                                            && ui_state.mutate_army == aid;
+                                            && ui_state.mutate_piece == aid;
                                         if ui
                                             .selectable_label(
                                                 picked,
-                                                format!("{aid}: {}", army.name),
+                                                format!("{aid}: {}", piece.name),
                                             )
                                             .clicked()
                                         {
                                             ui_state.mutate_all = false;
-                                            ui_state.mutate_army = aid;
+                                            ui_state.mutate_piece = aid;
                                         }
                                     }
                                 });
 
                             let targets: Vec<usize> = if ui_state.mutate_all {
-                                (0..draft.armies.len()).collect()
+                                (0..draft.pieces.len()).collect()
                             } else {
-                                vec![ui_state.mutate_army]
+                                vec![ui_state.mutate_piece]
                             };
 
                             let mut rng = rand::rng();
-                            let army_count = draft.armies.len();
+                            let piece_count = draft.pieces.len();
                             let shared_r = if ui_state.mutate_all && targets.len() > 1 {
-                                Some(shared_attack_extent_for_armies(&draft.armies, &targets))
+                                Some(shared_attack_extent_for_pieces(&draft.pieces, &targets))
                             } else {
                                 None
                             };
@@ -962,7 +962,7 @@ pub fn ui_game_definition(
                                 if mutate_panel_button(ui, "Toggle attack square") {
                                         for &aid in &targets {
                                             toggle_random_attack_square(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                                 &mut rng,
                                             );
                                         }
@@ -973,7 +973,7 @@ pub fn ui_game_definition(
                                     if shift_px {
                                         for &aid in &targets {
                                             shift_attacks(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                                 1,
                                                 0,
                                                 shared_r,
@@ -983,7 +983,7 @@ pub fn ui_game_definition(
                                     if shift_mx {
                                         for &aid in &targets {
                                             shift_attacks(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                                 -1,
                                                 0,
                                                 shared_r,
@@ -995,7 +995,7 @@ pub fn ui_game_definition(
                                     if shift_py {
                                         for &aid in &targets {
                                             shift_attacks(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                                 0,
                                                 1,
                                                 shared_r,
@@ -1005,7 +1005,7 @@ pub fn ui_game_definition(
                                     if shift_my {
                                         for &aid in &targets {
                                             shift_attacks(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                                 0,
                                                 -1,
                                                 shared_r,
@@ -1018,14 +1018,14 @@ pub fn ui_game_definition(
                                     if flip_y {
                                         for &aid in &targets {
                                             reflect_across_x_axis(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                             );
                                         }
                                     }
                                     if flip_x {
                                         for &aid in &targets {
                                             reflect_across_y_axis(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                             );
                                         }
                                     }
@@ -1035,14 +1035,14 @@ pub fn ui_game_definition(
                                     if rot_ccw {
                                         for &aid in &targets {
                                             rotate_ccw(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                             );
                                         }
                                     }
                                     if rot_cw {
                                         for &aid in &targets {
                                             rotate_cw(
-                                                &mut draft.armies[aid].piece.valid_moves,
+                                                &mut draft.pieces[aid].piece.valid_moves,
                                             );
                                         }
                                     }
@@ -1050,9 +1050,9 @@ pub fn ui_game_definition(
                                     if mutate_panel_button(ui, "Toggle blocked-by") {
                                         for &aid in &targets {
                                             toggle_random_blocked_by(
-                                                &mut draft.armies[aid],
+                                                &mut draft.pieces[aid],
                                                 aid,
-                                                army_count,
+                                                piece_count,
                                                 &mut rng,
                                             );
                                         }
@@ -1076,7 +1076,7 @@ pub fn ui_game_definition(
                             ui_state.sidebar.pieces_summary,
                             false,
                             |ui| {
-                                if draft.armies.is_empty() {
+                                if draft.pieces.is_empty() {
                                     ui.label("No pieces in set");
                                 } else {
                                     let advanced_was_open = ui_state.sidebar.pieces_advanced;
@@ -1088,15 +1088,15 @@ pub fn ui_game_definition(
                                             ui.horizontal_top(|ui| {
                                                 ui.spacing_mut().item_spacing =
                                                     egui::vec2(2.0, 0.0);
-                                                for (army_idx, army) in
-                                                    draft.armies.iter().enumerate()
+                                                for (piece_idx, piece) in
+                                                    draft.pieces.iter().enumerate()
                                                 {
-                                                    let blocked: Vec<_> = army
+                                                    let blocked: Vec<_> = piece
                                                         .blocked_by
                                                         .iter()
                                                         .filter_map(|&id| {
                                                             draft
-                                                                .armies
+                                                                .pieces
                                                                 .get(id)
                                                                 .map(|a| a.name.as_str())
                                                         })
@@ -1110,25 +1110,25 @@ pub fn ui_game_definition(
                                                         )
                                                     };
                                                     let hover = format!(
-                                                        "{army_idx}: {}\n{blocked_line}\nClick to edit",
-                                                        army.name
+                                                        "{piece_idx}: {}\n{blocked_line}\nClick to edit",
+                                                        piece.name
                                                     );
-                                                    let selected = army_idx
-                                                        == ui_state.edit_army
+                                                    let selected = piece_idx
+                                                        == ui_state.edit_piece
                                                         && (advanced_was_open
                                                             || open_advanced);
 
                                                     let preview = move_grid_preview_ui(
                                                         ui,
-                                                        army_idx,
-                                                        &army.piece.valid_moves,
-                                                        army.color,
+                                                        piece_idx,
+                                                        &piece.piece.valid_moves,
+                                                        piece.color,
                                                         selected,
                                                     )
                                                     .on_hover_text(hover);
 
                                                     if preview.clicked() {
-                                                        ui_state.edit_army = army_idx;
+                                                        ui_state.edit_piece = piece_idx;
                                                         open_advanced = true;
                                                     }
                                                 }
@@ -1140,7 +1140,7 @@ pub fn ui_game_definition(
 
                         pieces_roster_editor_ui(ui, &mut draft, &mut ui_state);
 
-                        if !draft.armies.is_empty() {
+                        if !draft.pieces.is_empty() {
                             ui_state.sidebar.pieces_advanced = sidebar_collapsing(
                                 ui,
                                 "pieces_advanced",
@@ -1148,38 +1148,38 @@ pub fn ui_game_definition(
                                 ui_state.sidebar.pieces_advanced,
                                 open_advanced,
                                 |ui| {
-                                if ui_state.edit_army >= draft.armies.len() {
-                                    ui_state.edit_army =
-                                        draft.armies.len().saturating_sub(1);
+                                if ui_state.edit_piece >= draft.pieces.len() {
+                                    ui_state.edit_piece =
+                                        draft.pieces.len().saturating_sub(1);
                                 }
-                                let army_idx = ui_state.edit_army;
+                                let piece_idx = ui_state.edit_piece;
 
                                 ui.horizontal(|ui| {
                                     ui.label("Name");
-                                    ui.text_edit_singleline(&mut draft.armies[army_idx].name);
+                                    ui.text_edit_singleline(&mut draft.pieces[piece_idx].name);
                                 });
 
                                 ui.horizontal(|ui| {
                                     ui.checkbox(
-                                        &mut draft.armies[army_idx].enabled,
+                                        &mut draft.pieces[piece_idx].enabled,
                                         "Enabled",
                                     )
                                     .on_hover_text(
                                         "Disabled pieces stay in the set but do not take placement turns",
                                     );
                                     if ui.button("Duplicate").clicked() {
-                                        duplicate_draft_army(
+                                        duplicate_draft_piece(
                                             &mut draft,
                                             &mut ui_state,
-                                            army_idx,
+                                            piece_idx,
                                         );
                                     }
                                 });
 
-                                let rgb = draft.armies[army_idx].color.to_srgba();
+                                let rgb = draft.pieces[piece_idx].color.to_srgba();
                                 let mut arr = [rgb.red, rgb.green, rgb.blue];
                                 if ui.color_edit_button_rgb(&mut arr).changed() {
-                                    draft.armies[army_idx].color =
+                                    draft.pieces[piece_idx].color =
                                         Color::srgb(arr[0], arr[1], arr[2]);
                                 }
 
@@ -1195,36 +1195,36 @@ pub fn ui_game_definition(
                                 });
                                 move_grid_ui(
                                     ui,
-                                    army_idx,
-                                    &mut draft.armies,
+                                    piece_idx,
+                                    &mut draft.pieces,
                                     ui_state.sync_attack_squares,
                                 );
                                 if ui.button("Clear").clicked() {
                                     clear_attack_squares(
-                                        &mut draft.armies,
-                                        army_idx,
+                                        &mut draft.pieces,
+                                        piece_idx,
                                         ui_state.sync_attack_squares,
                                     );
                                 }
 
                                 ui.label("Blocked by");
-                                for other in 0..draft.armies.len() {
-                                    if other == army_idx {
+                                for other in 0..draft.pieces.len() {
+                                    if other == piece_idx {
                                         continue;
                                     }
                                     let mut blocked =
-                                        draft.armies[army_idx].blocked_by.contains(&other);
-                                    let label = draft.armies[other].name.clone();
+                                        draft.pieces[piece_idx].blocked_by.contains(&other);
+                                    let label = draft.pieces[other].name.clone();
                                     if ui.checkbox(&mut blocked, label).changed() {
                                         if blocked {
-                                            if !draft.armies[army_idx]
+                                            if !draft.pieces[piece_idx]
                                                 .blocked_by
                                                 .contains(&other)
                                             {
-                                                draft.armies[army_idx].blocked_by.push(other);
+                                                draft.pieces[piece_idx].blocked_by.push(other);
                                             }
                                         } else {
-                                            draft.armies[army_idx]
+                                            draft.pieces[piece_idx]
                                                 .blocked_by
                                                 .retain(|&id| id != other);
                                         }
@@ -1232,10 +1232,10 @@ pub fn ui_game_definition(
                                 }
 
                                 if ui.button("Remove piece").clicked() {
-                                    remove_draft_army(
+                                    remove_draft_piece(
                                         &mut draft,
                                         &mut ui_state,
-                                        army_idx,
+                                        piece_idx,
                                     );
                                 }
                             },
@@ -1243,8 +1243,8 @@ pub fn ui_game_definition(
                         }
                     });
 
-                    if draft.turn_order.is_empty() && !draft.armies.is_empty() {
-                        draft.turn_order = (0..draft.armies.len()).collect();
+                    if draft.turn_order.is_empty() && !draft.pieces.is_empty() {
+                        draft.turn_order = (0..draft.pieces.len()).collect();
                     }
 
                     #[cfg(not(target_family = "wasm"))]
@@ -1345,9 +1345,9 @@ pub fn ui_game_definition(
 }
 
 fn dedupe_moves(def: &mut GameDefinition) {
-    for army in &mut def.armies {
-        army.piece.valid_moves.sort_by_key(|&(x, y)| (x, y));
-        army.piece.valid_moves.dedup();
+    for piece in &mut def.pieces {
+        piece.piece.valid_moves.sort_by_key(|&(x, y)| (x, y));
+        piece.piece.valid_moves.dedup();
     }
 }
 
@@ -1472,57 +1472,57 @@ fn sidebar_min_max_drag_row<T>(
     ui.add_space(SIDEBAR_FIELD_GAP);
 }
 
-fn duplicate_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {
-    if army_idx >= draft.armies.len() {
+fn duplicate_draft_piece(draft: &mut GameDefinition, ui_state: &mut UiState, piece_idx: usize) {
+    if piece_idx >= draft.pieces.len() {
         return;
     }
-    let mut copy = draft.armies[army_idx].clone();
+    let mut copy = draft.pieces[piece_idx].clone();
     copy.name = format!("{} copy", copy.name);
-    let new_id = draft.armies.len();
-    for army in &mut draft.armies {
-        if army.blocked_by.contains(&army_idx) && !army.blocked_by.contains(&new_id) {
-            army.blocked_by.push(new_id);
+    let new_id = draft.pieces.len();
+    for piece in &mut draft.pieces {
+        if piece.blocked_by.contains(&piece_idx) && !piece.blocked_by.contains(&new_id) {
+            piece.blocked_by.push(new_id);
         }
     }
-    draft.armies.push(copy);
+    draft.pieces.push(copy);
     draft.turn_order.push(new_id);
-    ui_state.edit_army = new_id;
-    ui_state.roster_remove_army = ui_state
-        .roster_remove_army
-        .min(draft.armies.len().saturating_sub(1));
+    ui_state.edit_piece = new_id;
+    ui_state.roster_remove_piece = ui_state
+        .roster_remove_piece
+        .min(draft.pieces.len().saturating_sub(1));
 }
 
-fn remove_draft_army(draft: &mut GameDefinition, ui_state: &mut UiState, army_idx: usize) {
-    if army_idx >= draft.armies.len() {
+fn remove_draft_piece(draft: &mut GameDefinition, ui_state: &mut UiState, piece_idx: usize) {
+    if piece_idx >= draft.pieces.len() {
         return;
     }
-    draft.armies.remove(army_idx);
-    for army in &mut draft.armies {
-        army.blocked_by.retain(|&id| id != army_idx);
-        for b in &mut army.blocked_by {
-            if *b > army_idx {
+    draft.pieces.remove(piece_idx);
+    for piece in &mut draft.pieces {
+        piece.blocked_by.retain(|&id| id != piece_idx);
+        for b in &mut piece.blocked_by {
+            if *b > piece_idx {
                 *b -= 1;
             }
         }
     }
-    draft.turn_order.retain(|&id| id != army_idx);
+    draft.turn_order.retain(|&id| id != piece_idx);
     for t in &mut draft.turn_order {
-        if *t > army_idx {
+        if *t > piece_idx {
             *t -= 1;
         }
     }
-    if draft.armies.is_empty() {
+    if draft.pieces.is_empty() {
         draft.turn_order.clear();
     }
-    if ui_state.edit_army >= draft.armies.len() {
-        ui_state.edit_army = draft.armies.len().saturating_sub(1);
+    if ui_state.edit_piece >= draft.pieces.len() {
+        ui_state.edit_piece = draft.pieces.len().saturating_sub(1);
     }
-    if !ui_state.mutate_all && ui_state.mutate_army >= draft.armies.len() {
-        ui_state.mutate_army = draft.armies.len().saturating_sub(1);
+    if !ui_state.mutate_all && ui_state.mutate_piece >= draft.pieces.len() {
+        ui_state.mutate_piece = draft.pieces.len().saturating_sub(1);
     }
-    ui_state.roster_remove_army = ui_state
-        .roster_remove_army
-        .min(draft.armies.len().saturating_sub(1));
+    ui_state.roster_remove_piece = ui_state
+        .roster_remove_piece
+        .min(draft.pieces.len().saturating_sub(1));
 }
 
 fn pieces_roster_editor_ui(
@@ -1586,53 +1586,53 @@ fn pieces_roster_editor_body(
                 );
                 if ui.button("Add").clicked() {
                     let color = ui_state.add_piece_color;
-                    draft.push_army_from_piece_preset(preset_label, preview_piece, color);
+                    draft.push_piece_from_piece_preset(preset_label, preview_piece, color);
                     ui_state.add_piece_color =
-                        GameDefinition::default_army_color(draft.armies.len());
-                    ui_state.edit_army = draft.armies.len().saturating_sub(1);
-                    ui_state.roster_remove_army = ui_state.edit_army;
-                    if !ui_state.mutate_all && ui_state.mutate_army >= draft.armies.len() {
-                        ui_state.mutate_army = draft.armies.len().saturating_sub(1);
+                        GameDefinition::default_piece_color(draft.pieces.len());
+                    ui_state.edit_piece = draft.pieces.len().saturating_sub(1);
+                    ui_state.roster_remove_piece = ui_state.edit_piece;
+                    if !ui_state.mutate_all && ui_state.mutate_piece >= draft.pieces.len() {
+                        ui_state.mutate_piece = draft.pieces.len().saturating_sub(1);
                     }
                 }
             });
 
-            if !draft.armies.is_empty() {
+            if !draft.pieces.is_empty() {
                 ui.add_space(12.0);
 
                 ui.vertical(|ui| {
                     ui.label("Remove");
-                    if ui_state.roster_remove_army >= draft.armies.len() {
-                        ui_state.roster_remove_army = draft.armies.len().saturating_sub(1);
+                    if ui_state.roster_remove_piece >= draft.pieces.len() {
+                        ui_state.roster_remove_piece = draft.pieces.len().saturating_sub(1);
                     }
-                    let remove_idx = ui_state.roster_remove_army;
+                    let remove_idx = ui_state.roster_remove_piece;
                     egui::ComboBox::from_id_salt("roster_remove_pick")
                         .selected_text(format!(
                             "{}: {}",
-                            remove_idx, draft.armies[remove_idx].name
+                            remove_idx, draft.pieces[remove_idx].name
                         ))
                         .show_ui(ui, |ui| {
-                            for (aid, army) in draft.armies.iter().enumerate() {
+                            for (aid, piece) in draft.pieces.iter().enumerate() {
                                 if ui
                                     .selectable_label(
                                         remove_idx == aid,
-                                        format!("{aid}: {}", army.name),
+                                        format!("{aid}: {}", piece.name),
                                     )
                                     .clicked()
                                 {
-                                    ui_state.roster_remove_army = aid;
+                                    ui_state.roster_remove_piece = aid;
                                 }
                             }
                         });
-                    let can_remove = !draft.armies.is_empty();
+                    let can_remove = !draft.pieces.is_empty();
                     if ui
                         .add_enabled(can_remove, egui::Button::new("Remove"))
                         .clicked()
                     {
-                        remove_draft_army(draft, ui_state, remove_idx);
-                        ui_state.roster_remove_army = ui_state
-                            .edit_army
-                            .min(draft.armies.len().saturating_sub(1));
+                        remove_draft_piece(draft, ui_state, remove_idx);
+                        ui_state.roster_remove_piece = ui_state
+                            .edit_piece
+                            .min(draft.pieces.len().saturating_sub(1));
                     }
                 });
             }
@@ -1648,7 +1648,7 @@ fn summary_preview_side_px(moves: &[(i32, i32)]) -> f32 {
 
 fn summary_strip_row_height(draft: &GameDefinition) -> f32 {
     draft
-        .armies
+        .pieces
         .iter()
         .map(|a| summary_preview_side_px(&a.piece.valid_moves))
         .fold(0.0_f32, f32::max)
@@ -1677,15 +1677,15 @@ fn move_grid_radius(moves: &[(i32, i32)], min_radius: i32) -> i32 {
 
 fn move_grid_preview_ui(
     ui: &mut egui::Ui,
-    army_idx: usize,
+    piece_idx: usize,
     moves: &[(i32, i32)],
-    army_color: Color,
+    piece_color: Color,
     selected: bool,
 ) -> egui::Response {
     let radius = move_grid_radius(moves, 1);
     let cell_px = MOVE_PREVIEW_CELL_PX;
     let gap = 0.0;
-    let rgb = army_color.to_srgba();
+    let rgb = piece_color.to_srgba();
     let attack_fill = egui::Color32::from_rgba_unmultiplied(
         (rgb.red * 255.0) as u8,
         (rgb.green * 255.0) as u8,
@@ -1698,7 +1698,7 @@ fn move_grid_preview_ui(
     let cell_outline = egui::Stroke::new(1.0, egui::Color32::from_rgb(58, 60, 68));
     let piece_label = egui::Color32::from_rgb(32, 34, 40);
 
-    ui.push_id(("move_grid_preview", army_idx), |ui| {
+    ui.push_id(("move_grid_preview", piece_idx), |ui| {
         let side = (2 * radius as usize + 1) as f32;
         let grid_side = side * cell_px + (side - 1.0).max(0.0) * gap;
         let outer_side = grid_side + 2.0 * MOVE_PREVIEW_PAD_PX;
@@ -1771,8 +1771,8 @@ fn set_attack_square(moves: &mut Vec<(i32, i32)>, x: i32, y: i32, on: bool) {
     moves.dedup();
 }
 
-fn attack_square_on(armies: &[Army], army_idx: usize, x: i32, y: i32) -> bool {
-    armies[army_idx]
+fn attack_square_on(pieces: &[Piece], piece_idx: usize, x: i32, y: i32) -> bool {
+    pieces[piece_idx]
         .piece
         .valid_moves
         .iter()
@@ -1780,47 +1780,47 @@ fn attack_square_on(armies: &[Army], army_idx: usize, x: i32, y: i32) -> bool {
 }
 
 fn apply_attack_square(
-    armies: &mut [Army],
-    army_idx: usize,
+    pieces: &mut [Piece],
+    piece_idx: usize,
     x: i32,
     y: i32,
     on: bool,
     sync_all: bool,
 ) -> bool {
-    if attack_square_on(armies, army_idx, x, y) == on {
+    if attack_square_on(pieces, piece_idx, x, y) == on {
         return false;
     }
     if sync_all {
-        for army in armies.iter_mut() {
-            set_attack_square(&mut army.piece.valid_moves, x, y, on);
+        for piece in pieces.iter_mut() {
+            set_attack_square(&mut piece.piece.valid_moves, x, y, on);
         }
     } else {
-        set_attack_square(&mut armies[army_idx].piece.valid_moves, x, y, on);
+        set_attack_square(&mut pieces[piece_idx].piece.valid_moves, x, y, on);
     }
     true
 }
 
-fn clear_attack_squares(armies: &mut [Army], army_idx: usize, sync_all: bool) {
+fn clear_attack_squares(pieces: &mut [Piece], piece_idx: usize, sync_all: bool) {
     if sync_all {
-        for army in armies.iter_mut() {
-            army.piece.valid_moves.clear();
+        for piece in pieces.iter_mut() {
+            piece.piece.valid_moves.clear();
         }
     } else {
-        armies[army_idx].piece.valid_moves.clear();
+        pieces[piece_idx].piece.valid_moves.clear();
     }
 }
 
 fn move_grid_ui(
     ui: &mut egui::Ui,
-    army_idx: usize,
-    armies: &mut [Army],
+    piece_idx: usize,
+    pieces: &mut [Piece],
     sync_all: bool,
 ) -> bool {
-    let radius = move_grid_radius(&armies[army_idx].piece.valid_moves, ATTACK_GRID_MIN_RADIUS);
+    let radius = move_grid_radius(&pieces[piece_idx].piece.valid_moves, ATTACK_GRID_MIN_RADIUS);
     let viewport = attack_grid_viewport_side_px();
     let mut changed = false;
 
-    ui.push_id(("move_grid", army_idx), |ui| {
+    ui.push_id(("move_grid", piece_idx), |ui| {
         egui::ScrollArea::both()
             .id_salt("viewport")
             .min_scrolled_width(viewport)
@@ -1829,7 +1829,7 @@ fn move_grid_ui(
             .max_height(viewport)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                changed = attack_grid_editor_ui(ui, army_idx, armies, sync_all, radius);
+                changed = attack_grid_editor_ui(ui, piece_idx, pieces, sync_all, radius);
             });
     });
 
@@ -1838,8 +1838,8 @@ fn move_grid_ui(
 
 fn attack_grid_editor_ui(
     ui: &mut egui::Ui,
-    army_idx: usize,
-    armies: &mut [Army],
+    piece_idx: usize,
+    pieces: &mut [Piece],
     sync_all: bool,
     radius: i32,
 ) -> bool {
@@ -1858,7 +1858,7 @@ fn attack_grid_editor_ui(
                         continue;
                     }
 
-                    let selected = attack_square_on(armies, army_idx, x, y);
+                    let selected = attack_square_on(pieces, piece_idx, x, y);
                     let label = if selected { "x" } else { "" };
                     let mut button = egui::Button::new(label).min_size(cell_size);
                     if selected {
@@ -1871,8 +1871,8 @@ fn attack_grid_editor_ui(
                         .clicked()
                     {
                         if apply_attack_square(
-                            armies,
-                            army_idx,
+                            pieces,
+                            piece_idx,
                             x,
                             y,
                             !selected,

@@ -1,7 +1,7 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use red_black_knights::model::{ArmyId, GameDefinition};
+use red_black_knights::model::{PieceId, GameDefinition};
 use red_black_knights::sim::Simulation;
 
 const DEFAULT_WARMUP_ITERS: usize = 2;
@@ -158,10 +158,10 @@ fn run_case(case: &BenchCase) -> (usize, u64) {
     (sim.placements.len(), placement_checksum(&sim.placements))
 }
 
-fn placement_checksum(placements: &[(u32, ArmyId)]) -> u64 {
+fn placement_checksum(placements: &[(u32, PieceId)]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for &(index, army_id) in placements {
-        let value = ((index as u64) << 8) ^ army_id as u64;
+    for &(index, piece_id) in placements {
+        let value = ((index as u64) << 8) ^ piece_id as u64;
         hash ^= value;
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
