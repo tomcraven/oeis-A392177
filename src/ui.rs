@@ -231,6 +231,8 @@ pub fn ui_game_definition(
         .default_width(SIDEBAR_PANEL_WIDTH)
         .show(ctx, |ui| {
             egui::ScrollArea::vertical()
+                .id_salt("sidebar_scroll")
+                .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.heading("Red & Black Knights");
@@ -813,11 +815,7 @@ pub fn ui_game_definition(
                                     ui.label("No pieces in set");
                                 } else {
                                     let advanced_was_open = ui_state.sidebar.pieces_advanced;
-                                    let row_h = draft
-                                        .armies
-                                        .iter()
-                                        .map(|a| summary_preview_side_px(&a.piece.valid_moves))
-                                        .fold(0.0_f32, f32::max);
+                                    let row_h = summary_strip_row_height(&draft);
                                     egui::ScrollArea::horizontal()
                                         .min_scrolled_height(0.0)
                                         .max_height(row_h)
@@ -919,6 +917,13 @@ pub fn ui_game_definition(
                                     &mut draft.armies,
                                     ui_state.sync_attack_squares,
                                 );
+                                if ui.button("Clear").clicked() {
+                                    clear_attack_squares(
+                                        &mut draft.armies,
+                                        army_idx,
+                                        ui_state.sync_attack_squares,
+                                    );
+                                }
 
                                 ui.label("Blocked by");
                                 for other in 0..draft.armies.len() {
@@ -1288,13 +1293,29 @@ fn pieces_roster_editor_body(
 
 fn summary_preview_side_px(moves: &[(i32, i32)]) -> f32 {
     let radius = move_grid_radius(moves, 1);
-    let cell_px = MOVE_PREVIEW_CELL_PX;
-    let side = (2 * radius as usize + 1) as f32;
-    side * cell_px + 2.0 * MOVE_PREVIEW_PAD_PX
+    let cells = (2 * radius + 1) as f32;
+    cells * MOVE_PREVIEW_CELL_PX + 2.0 * MOVE_PREVIEW_PAD_PX
+}
+
+fn summary_strip_row_height(draft: &GameDefinition) -> f32 {
+    draft
+        .armies
+        .iter()
+        .map(|a| summary_preview_side_px(&a.piece.valid_moves))
+        .fold(0.0_f32, f32::max)
 }
 
 const MOVE_PREVIEW_CELL_PX: f32 = 8.0;
 const MOVE_PREVIEW_PAD_PX: f32 = 4.0;
+const ATTACK_GRID_MIN_RADIUS: i32 = 4;
+const ATTACK_GRID_LAYOUT_RADIUS: i32 = 4;
+const ATTACK_GRID_CELL_PX: f32 = 22.0;
+const ATTACK_GRID_CELL_GAP: f32 = 1.0;
+
+fn attack_grid_viewport_side_px() -> f32 {
+    let cells = (2 * ATTACK_GRID_LAYOUT_RADIUS + 1) as f32;
+    cells * ATTACK_GRID_CELL_PX + (cells - 1.0).max(0.0) * ATTACK_GRID_CELL_GAP
+}
 
 fn move_grid_radius(moves: &[(i32, i32)], min_radius: i32) -> i32 {
     moves
@@ -1358,10 +1379,10 @@ fn move_grid_preview_ui(
                 let cell_rect =
                     egui::Rect::from_min_size(min, egui::vec2(cell_px, cell_px));
 
-                let selected = moves.iter().any(|&m| m == (x, y));
+                let attack = moves.iter().any(|&m| m == (x, y));
                 let fill = if x == 0 && y == 0 {
                     piece_fill
-                } else if selected {
+                } else if attack {
                     attack_fill
                 } else {
                     empty_fill
@@ -1401,71 +1422,120 @@ fn set_attack_square(moves: &mut Vec<(i32, i32)>, x: i32, y: i32, on: bool) {
     moves.dedup();
 }
 
+fn attack_square_on(armies: &[Army], army_idx: usize, x: i32, y: i32) -> bool {
+    armies[army_idx]
+        .piece
+        .valid_moves
+        .iter()
+        .any(|&m| m == (x, y))
+}
+
+fn apply_attack_square(
+    armies: &mut [Army],
+    army_idx: usize,
+    x: i32,
+    y: i32,
+    on: bool,
+    sync_all: bool,
+) -> bool {
+    if attack_square_on(armies, army_idx, x, y) == on {
+        return false;
+    }
+    if sync_all {
+        for army in armies.iter_mut() {
+            set_attack_square(&mut army.piece.valid_moves, x, y, on);
+        }
+    } else {
+        set_attack_square(&mut armies[army_idx].piece.valid_moves, x, y, on);
+    }
+    true
+}
+
+fn clear_attack_squares(armies: &mut [Army], army_idx: usize, sync_all: bool) {
+    if sync_all {
+        for army in armies.iter_mut() {
+            army.piece.valid_moves.clear();
+        }
+    } else {
+        armies[army_idx].piece.valid_moves.clear();
+    }
+}
+
 fn move_grid_ui(
     ui: &mut egui::Ui,
     army_idx: usize,
     armies: &mut [Army],
     sync_all: bool,
 ) -> bool {
-    let radius = move_grid_radius(&armies[army_idx].piece.valid_moves, 4);
-    let cell_size = egui::Vec2::splat(22.0);
+    let radius = move_grid_radius(&armies[army_idx].piece.valid_moves, ATTACK_GRID_MIN_RADIUS);
+    let viewport = attack_grid_viewport_side_px();
     let mut changed = false;
 
     ui.push_id(("move_grid", army_idx), |ui| {
-        egui::Grid::new("cells")
-            .min_col_width(cell_size.x)
-            .min_row_height(cell_size.y)
-            .spacing(egui::Vec2::splat(1.0))
+        egui::ScrollArea::both()
+            .id_salt("viewport")
+            .min_scrolled_width(viewport)
+            .min_scrolled_height(viewport)
+            .max_width(viewport)
+            .max_height(viewport)
+            .auto_shrink([false, false])
             .show(ui, |ui| {
-                for y in (-radius..=radius).rev() {
-                    for x in -radius..=radius {
-                        if x == 0 && y == 0 {
-                            ui.add_enabled(false, egui::Button::new("P").min_size(cell_size));
-                            continue;
-                        }
+                changed = attack_grid_editor_ui(ui, army_idx, armies, sync_all, radius);
+            });
+    });
 
-                        let move_idx = armies[army_idx]
-                            .piece
-                            .valid_moves
-                            .iter()
-                            .position(|&m| m == (x, y));
-                        let selected = move_idx.is_some();
-                        let label = if selected { "x" } else { "" };
-                        let mut button = egui::Button::new(label).min_size(cell_size);
-                        if selected {
-                            button = button.fill(egui::Color32::from_rgb(90, 40, 40));
-                        }
+    changed
+}
 
-                        if ui
-                            .add(button)
-                            .on_hover_text(format!("({x}, {y})"))
-                            .clicked()
-                        {
-                            let on = move_idx.is_none();
-                            if sync_all {
-                                for army in armies.iter_mut() {
-                                    set_attack_square(
-                                        &mut army.piece.valid_moves,
-                                        x,
-                                        y,
-                                        on,
-                                    );
-                                }
-                            } else {
-                                set_attack_square(
-                                    &mut armies[army_idx].piece.valid_moves,
-                                    x,
-                                    y,
-                                    on,
-                                );
-                            }
+fn attack_grid_editor_ui(
+    ui: &mut egui::Ui,
+    army_idx: usize,
+    armies: &mut [Army],
+    sync_all: bool,
+    radius: i32,
+) -> bool {
+    let cell_size = egui::Vec2::splat(ATTACK_GRID_CELL_PX);
+    let mut changed = false;
+
+    egui::Grid::new("cells")
+        .min_col_width(cell_size.x)
+        .min_row_height(cell_size.y)
+        .spacing(egui::Vec2::splat(ATTACK_GRID_CELL_GAP))
+        .show(ui, |ui| {
+            for y in (-radius..=radius).rev() {
+                for x in -radius..=radius {
+                    if x == 0 && y == 0 {
+                        ui.add_enabled(false, egui::Button::new("P").min_size(cell_size));
+                        continue;
+                    }
+
+                    let selected = attack_square_on(armies, army_idx, x, y);
+                    let label = if selected { "x" } else { "" };
+                    let mut button = egui::Button::new(label).min_size(cell_size);
+                    if selected {
+                        button = button.fill(egui::Color32::from_rgb(90, 40, 40));
+                    }
+
+                    if ui
+                        .add(button)
+                        .on_hover_text(format!("({x}, {y})"))
+                        .clicked()
+                    {
+                        if apply_attack_square(
+                            armies,
+                            army_idx,
+                            x,
+                            y,
+                            !selected,
+                            sync_all,
+                        ) {
                             changed = true;
                         }
                     }
-                    ui.end_row();
                 }
-            });
-    });
+                ui.end_row();
+            }
+        });
 
     changed
 }

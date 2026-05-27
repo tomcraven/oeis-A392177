@@ -443,7 +443,8 @@ impl BoardPngRaster {
                 self.grid_row[offset..offset + 4].copy_from_slice(&color);
             }
 
-            let out_y_base = self.next_row * self.cell_pixel_scale;
+            let py = (self.bounds.max_y - y) as u32;
+            let out_y_base = py * self.cell_pixel_scale;
             for sy in 0..self.cell_pixel_scale {
                 let out_row_start = ((out_y_base + sy) as usize) * self.row_stride;
                 let out_row = &mut self.out_data[out_row_start..out_row_start + self.row_stride];

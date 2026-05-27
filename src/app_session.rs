@@ -19,6 +19,8 @@ pub struct SavedUiState {
     pub mutate_all: bool,
     pub preset_index: usize,
     pub edit_army: usize,
+    #[serde(default)]
+    pub sync_attack_squares: bool,
     pub bookmark_new_name: String,
     pub add_piece_preset_index: usize,
     pub roster_remove_army: usize,
@@ -61,6 +63,7 @@ pub fn capture_session(
             mutate_all: ui_state.mutate_all,
             preset_index: ui_state.preset_index,
             edit_army: ui_state.edit_army,
+            sync_attack_squares: ui_state.sync_attack_squares,
             bookmark_new_name: ui_state.bookmark_new_name.clone(),
             add_piece_preset_index: ui_state.add_piece_preset_index,
             roster_remove_army: ui_state.roster_remove_army,
@@ -79,6 +82,7 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.mutate_army = saved.mutate_army.min(n.saturating_sub(1));
     ui_state.preset_index = saved.preset_index;
     ui_state.edit_army = saved.edit_army.min(n.saturating_sub(1));
+    ui_state.sync_attack_squares = saved.sync_attack_squares;
     ui_state.bookmark_new_name = saved.bookmark_new_name.clone();
     ui_state.add_piece_preset_index = saved.add_piece_preset_index;
     ui_state.roster_remove_army = saved.roster_remove_army.min(n.saturating_sub(1));
@@ -258,6 +262,7 @@ mod tests {
         ui.sidebar.view = true;
         ui.sidebar.pieces = true;
         ui.sidebar.pieces_summary = true;
+        ui.sync_attack_squares = true;
         let session = capture_session(
             &def,
             CameraSessionConfig {
@@ -275,5 +280,6 @@ mod tests {
         assert!(loaded.ui.sidebar.view);
         assert!(loaded.ui.sidebar.pieces);
         assert!(loaded.ui.sidebar.pieces_summary);
+        assert!(loaded.ui.sync_attack_squares);
     }
 }

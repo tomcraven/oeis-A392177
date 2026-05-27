@@ -74,6 +74,14 @@ fn apply_zoom_factor(ortho: &mut OrthographicProjection, factor: f32, pan: &PanC
     ortho.scale = (ortho.scale * factor).clamp(pan.min_scale, pan.max_scale);
 }
 
+fn pan_speed_multiplier(keyboard: &ButtonInput<KeyCode>) -> f32 {
+    if keyboard.pressed(KeyCode::ShiftLeft) || keyboard.pressed(KeyCode::ShiftRight) {
+        2.0
+    } else {
+        1.0
+    }
+}
+
 /// Runs after egui updates [`EguiWantsInput`] so typing in the sidebar does not pan the board.
 pub fn camera_controls(
     egui_wants: Res<EguiWantsInput>,
@@ -108,8 +116,9 @@ pub fn camera_controls(
         // `OrthographicProjection::area` already includes `scale` (see Bevy camera update).
         let visible_world_width = ortho.area.width();
         let world_per_sec = pan.pan_screen_widths_per_sec * visible_world_width;
-        transform.translation +=
-            (delta.normalize() * world_per_sec * time.delta_secs()).extend(0.0);
+        let speed = pan_speed_multiplier(&keyboard);
+        transform.translation += (delta.normalize() * world_per_sec * time.delta_secs() * speed)
+            .extend(0.0);
     }
 }
 
@@ -147,6 +156,7 @@ pub fn camera_pointer_controls(
     egui_wants: Res<EguiWantsInput>,
     viewport: Res<crate::viewport::ViewportState>,
     window_q: Query<&Window>,
+    keyboard: Res<ButtonInput<KeyCode>>,
     mouse_buttons: Res<ButtonInput<MouseButton>>,
     touches: Res<Touches>,
     mut pointer: ResMut<BoardPointerState>,
@@ -194,9 +204,17 @@ pub fn camera_pointer_controls(
         pointer.mouse_pan = false;
     }
 
+    let pan_speed = pan_speed_multiplier(&keyboard);
+
     if pointer.mouse_pan {
         for motion in mouse_motion_events.read() {
-            apply_board_pan(&mut transform, motion.delta, ortho, board_w, board_h);
+            apply_board_pan(
+                &mut transform,
+                motion.delta * pan_speed,
+                ortho,
+                board_w,
+                board_h,
+            );
         }
     } else {
         mouse_motion_events.clear();
@@ -230,7 +248,13 @@ pub fn camera_pointer_controls(
             if pointer.pan_touch_id == Some(touch.id()) {
                 let delta = touch.delta();
                 if delta != Vec2::ZERO {
-                    apply_board_pan(&mut transform, delta, ortho, board_w, board_h);
+                    apply_board_pan(
+                        &mut transform,
+                        delta * pan_speed,
+                        ortho,
+                        board_w,
+                        board_h,
+                    );
                 }
             }
         } else {
