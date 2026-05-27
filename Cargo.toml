@@ -127,6 +127,10 @@ place_profile = []
 app_profile = []
 
 [[bin]]
+name = "time_index_order"
+path = "src/bin/time_index_order.rs"
+
+[[bin]]
 name = "profile_place"
 path = "src/bin/profile_place.rs"
 required-features = ["place_profile"]

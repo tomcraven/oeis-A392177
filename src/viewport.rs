@@ -4,8 +4,8 @@ use std::time::Duration;
 use crate::CELL_SIZE;
 use crate::camera::BoardCamera;
 use crate::model::GameDefinition;
+use crate::index_order::VisitOrder;
 use crate::sim_worker::SimulationBridge;
-use crate::spiral::xy_to_index;
 
 /// Default window size (side panel + rectangular board region).
 pub const WINDOW_WIDTH: f32 = 1440.0;
@@ -92,19 +92,23 @@ pub fn viewport_grid_bounds(
     }
 }
 
-pub fn spiral_target_index_for_bounds(bounds: GridBounds) -> u32 {
-    max_visible_spiral_index(bounds).saturating_add(INDEX_MARGIN)
+pub fn visit_target_index_for_bounds(bounds: GridBounds, order: VisitOrder) -> u32 {
+    max_visible_index_for_order(bounds, order).saturating_add(INDEX_MARGIN)
 }
 
-fn max_visible_spiral_index(bounds: GridBounds) -> u32 {
+pub fn spiral_target_index_for_bounds(bounds: GridBounds) -> u32 {
+    visit_target_index_for_bounds(bounds, VisitOrder::SquareSpiral)
+}
+
+fn max_visible_index_for_order(bounds: GridBounds, order: VisitOrder) -> u32 {
     let mut max_index = 0;
     for x in bounds.min_x..=bounds.max_x {
-        max_index = max_index.max(xy_to_index(x, bounds.min_y));
-        max_index = max_index.max(xy_to_index(x, bounds.max_y));
+        max_index = max_index.max(order.xy_to_index(x, bounds.min_y));
+        max_index = max_index.max(order.xy_to_index(x, bounds.max_y));
     }
     for y in bounds.min_y..=bounds.max_y {
-        max_index = max_index.max(xy_to_index(bounds.min_x, y));
-        max_index = max_index.max(xy_to_index(bounds.max_x, y));
+        max_index = max_index.max(order.xy_to_index(bounds.min_x, y));
+        max_index = max_index.max(order.xy_to_index(bounds.max_x, y));
     }
     max_index
 }
@@ -165,6 +169,7 @@ pub fn sync_board_camera_viewport(
 pub fn sync_simulation_to_viewport(
     mut sim: ResMut<SimulationBridge>,
     def: Res<GameDefinition>,
+    ui_state: Res<crate::ui::UiState>,
     mut viewport: ResMut<ViewportState>,
     camera_q: Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: Query<&Window>,
@@ -178,6 +183,7 @@ pub fn sync_simulation_to_viewport(
             sync_simulation_to_viewport_inner(
                 &mut sim,
                 def.as_ref(),
+                ui_state.visit_order,
                 &mut viewport,
                 &camera_q,
                 &window_q,
@@ -188,6 +194,7 @@ pub fn sync_simulation_to_viewport(
     sync_simulation_to_viewport_inner(
         &mut sim,
         def.as_ref(),
+        ui_state.visit_order,
         &mut viewport,
         &camera_q,
         &window_q,
@@ -197,6 +204,7 @@ pub fn sync_simulation_to_viewport(
 fn sync_simulation_to_viewport_inner(
     sim: &mut SimulationBridge,
     def: &GameDefinition,
+    visit_order: VisitOrder,
     viewport: &mut ViewportState,
     camera_q: &Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: &Query<&Window>,
@@ -221,7 +229,7 @@ fn sync_simulation_to_viewport_inner(
         viewport.render_dirty = true;
     }
 
-    let new_target = spiral_target_index_for_bounds(bounds);
+    let new_target = visit_target_index_for_bounds(bounds, visit_order);
     if new_target != viewport.target_index {
         viewport.target_index = new_target;
         sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);

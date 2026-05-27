@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 use crate::calibration_config;
 use crate::camera::{BoardCamera, PanCamera};
 use crate::camera_config::CameraSessionConfig;
+use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState, WINDOW_HEIGHT, WINDOW_WIDTH};
@@ -291,7 +292,7 @@ pub fn setup_perf_harness(
         panic!("unknown preset {:?} in perf scenario", scenario.preset);
     };
     *def = game.clone();
-    sim.request_reset(game);
+    sim.request_reset(game, VisitOrder::default());
     viewport.left_inset_px = scenario.left_inset_px;
     viewport.render_dirty = true;
     viewport.target_index = 0;

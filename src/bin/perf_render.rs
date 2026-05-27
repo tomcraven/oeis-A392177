@@ -4,6 +4,7 @@ use std::time::Instant;
 
 use red_black_knights::model::GameDefinition;
 use red_black_knights::render::{grid_texture_size, raster_checksum, raster_spiral_grid};
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 use red_black_knights::ui::BoardColourMode;
 use red_black_knights::viewport::GridBounds;
@@ -78,7 +79,7 @@ fn bench_case(
     measured_iters: u32,
 ) {
     let def = preset();
-    let mut sim = Simulation::new(&def);
+    let mut sim = Simulation::new(&def, VisitOrder::default());
     for _ in 0..turns {
         assert!(sim.step_turn(&def), "{name}: step failed");
     }

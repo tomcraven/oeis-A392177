@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use bevy::prelude::Resource;
 
+use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::sim::{OccupancyGrid, Simulation};
 
@@ -38,7 +39,10 @@ mod threaded {
     use std::thread::{self, JoinHandle};
 
     enum SimCommand {
-        Reset(GameDefinition),
+        Reset {
+            def: GameDefinition,
+            visit_order: VisitOrder,
+        },
         Advance {
             target_index: u32,
             budget: Duration,
@@ -66,13 +70,13 @@ mod threaded {
     }
 
     impl SimulationBridge {
-        pub fn spawn(def: GameDefinition) -> Self {
+        pub fn spawn(def: GameDefinition, visit_order: VisitOrder) -> Self {
             let (cmd_tx, cmd_rx) = mpsc::channel();
             let (update_tx, update_rx) = mpsc::channel();
 
             let worker = thread::Builder::new()
                 .name("red_black_knights_sim".into())
-                .spawn(move || sim_worker_main(cmd_rx, update_tx, def))
+                .spawn(move || sim_worker_main(cmd_rx, update_tx, def, visit_order))
                 .expect("sim worker thread");
 
             Self {
@@ -127,10 +131,10 @@ mod threaded {
             self.advance_in_flight
         }
 
-        pub fn request_reset(&mut self, def: GameDefinition) {
+        pub fn request_reset(&mut self, def: GameDefinition, visit_order: VisitOrder) {
             self.next_job_id += 1;
             self.advance_in_flight = false;
-            let _ = self.cmd_tx.send(SimCommand::Reset(def));
+            let _ = self.cmd_tx.send(SimCommand::Reset { def, visit_order });
         }
 
         pub fn reprioritize_advance(&mut self, target_index: u32, budget: Duration) {
@@ -163,16 +167,23 @@ mod threaded {
         cmd_rx: Receiver<SimCommand>,
         update_tx: Sender<SimUpdate>,
         initial_def: GameDefinition,
+        initial_order: VisitOrder,
     ) {
         let mut def = initial_def;
-        let mut sim = Simulation::new(&def);
+        let mut visit_order = initial_order;
+        let mut sim = Simulation::new(&def, visit_order);
         let _ = update_tx.send(snapshot(&sim, 0, true));
 
         while let Ok(command) = cmd_rx.recv() {
             match command {
                 SimCommand::Shutdown => break,
-                SimCommand::Reset(new_def) => {
+                SimCommand::Reset {
+                    def: new_def,
+                    visit_order: new_order,
+                } => {
                     def = new_def;
+                    visit_order = new_order;
+                    sim.visit_order = visit_order;
                     sim.reset(&def);
                     let _ = update_tx.send(snapshot(&sim, u64::MAX, true));
                 }
@@ -234,8 +245,12 @@ mod threaded {
                                 job_id = j;
                                 continue;
                             }
-                            Interrupt::Reset(new_def) => {
+                            Interrupt::Reset {
+                                def: new_def,
+                                visit_order: new_order,
+                            } => {
                                 *def = new_def;
+                                sim.visit_order = new_order;
                                 sim.reset(def);
                                 let _ = update_tx.send(snapshot(sim, u64::MAX, true));
                                 return;
@@ -257,7 +272,10 @@ mod threaded {
             budget: Duration,
             job_id: u64,
         },
-        Reset(GameDefinition),
+        Reset {
+            def: GameDefinition,
+            visit_order: VisitOrder,
+        },
         Shutdown,
     }
 
@@ -285,7 +303,9 @@ mod threaded {
                         }
                     }
                 }
-                Ok(SimCommand::Reset(def)) => return Some(Interrupt::Reset(def)),
+                Ok(SimCommand::Reset { def, visit_order }) => {
+                    return Some(Interrupt::Reset { def, visit_order });
+                }
                 Ok(SimCommand::Shutdown) => return Some(Interrupt::Shutdown),
                 Err(TryRecvError::Empty) => return best,
                 Err(TryRecvError::Disconnected) => return None,
@@ -322,8 +342,8 @@ pub struct SimulationBridge {
 
 #[cfg(target_family = "wasm")]
 impl SimulationBridge {
-    pub fn spawn(def: GameDefinition) -> Self {
-        let sim = Simulation::new(&def);
+    pub fn spawn(def: GameDefinition, visit_order: VisitOrder) -> Self {
+        let sim = Simulation::new(&def, visit_order);
         let display = display_from_sim(&sim);
         Self {
             sim,
@@ -365,10 +385,11 @@ impl SimulationBridge {
         self.advance_in_flight
     }
 
-    pub fn request_reset(&mut self, def: GameDefinition) {
+    pub fn request_reset(&mut self, def: GameDefinition, visit_order: VisitOrder) {
         self.next_job_id += 1;
         self.advance_in_flight = false;
         self.def = def;
+        self.sim.visit_order = visit_order;
         self.sim.reset(&self.def);
         self.display = display_from_sim(&self.sim);
     }

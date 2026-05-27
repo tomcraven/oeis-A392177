@@ -14,6 +14,7 @@ use crate::game_snapshot::DiscoverRunConfig;
 use crate::model::{PieceId, GameDefinition};
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::grid_texture_size;
+use crate::index_order::VisitOrder;
 use crate::sim::Simulation;
 use crate::spiral::index_to_xy;
 use crate::viewport::GridBounds;
@@ -135,7 +136,7 @@ fn simulate(
     target_index: u32,
     turns: usize,
 ) -> (Simulation, DiscoverRunMeta) {
-    let mut sim = Simulation::new(def);
+    let mut sim = Simulation::new(def, VisitOrder::default());
     if target_index > 0 {
         sim.advance_to_target(def, target_index);
     } else {
@@ -629,7 +630,7 @@ mod tests {
         use crate::model::GameDefinition;
 
         let def = GameDefinition::knight_2_pairwise();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         sim.advance_to_target(&def, 50_000);
         let bounds = bounds_from_placements(&sim.placements, BOUNDS_PADDING);
         assert!(bounds.cell_width() > 200);

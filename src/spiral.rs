@@ -2,18 +2,23 @@
 //! Center is 0 at (0, 0); index 1 is east; spiral runs counterclockwise.
 
 /// Spiral index → grid coordinates (x east, y north).
-#[cfg_attr(not(test), allow(dead_code))]
+#[inline(always)]
 pub fn index_to_xy(index: u32) -> (i32, i32) {
     if index == 0 {
         return (0, 0);
     }
-    let ring = (index.isqrt() + 1) / 2;
+    let ro = index_to_ring_offset(index);
+    index_to_xy_ring_offset(ro.ring, ro.offset)
+}
+
+/// CCW spiral geometry: `offset` is distance from `inner_side²` on Chebyshev ring `ring`.
+#[inline(always)]
+pub fn index_to_xy_ring_offset(ring: u32, offset: u32) -> (i32, i32) {
+    if ring == 0 {
+        return (0, 0);
+    }
     let ring_i = ring as i32;
     let side_len = 2 * ring;
-    let inner_side = 2 * ring - 1;
-    let start = inner_side * inner_side;
-    let offset = index - start;
-
     if offset < side_len {
         return (ring_i, -ring_i + 1 + offset as i32);
     }
@@ -23,7 +28,10 @@ pub fn index_to_xy(index: u32) -> (i32, i32) {
     if offset < 3 * side_len {
         return (-ring_i, ring_i - 1 - (offset - 2 * side_len) as i32);
     }
-    (-ring_i + 1 + (offset - 3 * side_len) as i32, -ring_i)
+    (
+        -ring_i + 1 + (offset - 3 * side_len) as i32,
+        -ring_i,
+    )
 }
 
 /// Grid coordinates → spiral index.
@@ -113,6 +121,24 @@ pub fn spiral_step((x, y): (i32, i32)) -> (i32, i32) {
         (x - 1, y)
     } else {
         (x, y + 1)
+    }
+}
+
+/// Clockwise square spiral step (matches [`index_to_xy`] on reversed ring offsets).
+#[inline(always)]
+pub fn spiral_step_clockwise((x, y): (i32, i32)) -> (i32, i32) {
+    if x == 0 && y == 0 {
+        return (1, 0);
+    }
+    let w = x.abs().max(y.abs());
+    if x == w && y > -w {
+        (x, y - 1)
+    } else if y == -w {
+        (x - 1, y)
+    } else if x == -w {
+        (x, y + 1)
+    } else {
+        (x + 1, y)
     }
 }
 

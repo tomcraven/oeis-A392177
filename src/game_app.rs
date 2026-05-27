@@ -158,8 +158,15 @@ fn setup_camera(mut commands: Commands) {
     ));
 }
 
-fn setup_sim_worker(mut commands: Commands, def: Res<GameDefinition>) {
-    commands.insert_resource(SimulationBridge::spawn(def.clone()));
+fn setup_sim_worker(
+    mut commands: Commands,
+    def: Res<GameDefinition>,
+    ui_state: Res<UiState>,
+) {
+    commands.insert_resource(SimulationBridge::spawn(
+        def.clone(),
+        ui_state.visit_order,
+    ));
 }
 
 fn load_bookmarks(mut bookmarks: ResMut<crate::bookmark_config::BookmarkStore>) {

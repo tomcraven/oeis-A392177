@@ -122,7 +122,8 @@ pub fn apply_share_snapshot(
     viewport.render_dirty = true;
     cache.rendered_bounds = None;
 
-    sim.request_reset(def.clone());
+    sim.request_reset(def.clone(), ui_state.visit_order);
+    ui_state.visit_order_applied = ui_state.visit_order;
     apply_camera_to_query(&snapshot.camera, camera_q);
 }
 

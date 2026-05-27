@@ -2,6 +2,7 @@ use std::hint::black_box;
 use std::time::{Duration, Instant};
 
 use red_black_knights::model::{PieceId, GameDefinition};
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 
 const DEFAULT_WARMUP_ITERS: usize = 2;
@@ -151,7 +152,7 @@ fn bench_cases(turns: usize) -> Vec<BenchCase> {
 
 fn run_case(case: &BenchCase) -> (usize, u64) {
     let def = (case.def)();
-    let mut sim = Simulation::new(&def);
+    let mut sim = Simulation::new(&def, VisitOrder::default());
     for _ in 0..case.turns {
         assert!(sim.step_turn(&def), "{} failed to step", case.name);
     }

@@ -6,6 +6,7 @@ use red_black_knights::model::GameDefinition;
 use red_black_knights::place_profile::{
     self, ForbiddenInsertHarness, ForbiddenInsertStats, OccupancyInsertHarness, PlaceWorkStats,
 };
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 use red_black_knights::spiral::{index_to_xy, xy_to_index};
 
@@ -80,7 +81,7 @@ fn collect_run(
     place_profile::reset();
     place_profile::clear_forbidden_records();
     place_profile::set_profiling_enabled(true);
-    let mut sim = Simulation::new(def);
+    let mut sim = Simulation::new(def, VisitOrder::default());
     let mut events = Vec::with_capacity(TURNS);
 
     for _ in 0..TURNS {
@@ -109,7 +110,7 @@ fn collect_run(
 
 fn bench_full_step_turn(def: &GameDefinition) -> f64 {
     median_ms(5, || {
-        let mut sim = Simulation::new(def);
+        let mut sim = Simulation::new(def, VisitOrder::default());
         let start = Instant::now();
         for _ in 0..TURNS {
             assert!(sim.step_turn(def));
@@ -121,7 +122,7 @@ fn bench_full_step_turn(def: &GameDefinition) -> f64 {
 
 fn bench_place_replay(def: &GameDefinition, events: &[PlaceEvent]) -> f64 {
     median_ms(5, || {
-        let mut sim = Simulation::new(def);
+        let mut sim = Simulation::new(def, VisitOrder::default());
         let start = Instant::now();
         for event in events {
             sim.replay_place_profiled(def, event.index, event.xy, event.piece_id);

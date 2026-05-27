@@ -1,7 +1,6 @@
 use crate::model::{PieceId, GameDefinition};
-use crate::spiral::{index_to_xy, spiral_step, xy_to_index};
 
-pub use crate::index_order::{IndexOrder, SquareSpiral};
+pub use crate::index_order::{IndexOrder, SquareSpiral, VisitOrder};
 use bevy::prelude::{FromWorld, Resource, World};
 use std::sync::Arc;
 use std::time::Duration;
@@ -22,6 +21,7 @@ fn resize_piece_vectors<T: Clone>(vec: &mut Vec<T>, len: usize, fill: T) {
 
 #[derive(Resource)]
 pub struct Simulation {
+    pub visit_order: VisitOrder,
     /// Dense by spiral index because simulation placement scans are numeric and monotonic.
     /// This avoids hashing on every occupied-cell check in the hot loop.
     pub occupancy: OccupancyGrid,
@@ -40,8 +40,9 @@ pub struct Simulation {
 }
 
 impl Simulation {
-    pub fn new(def: &GameDefinition) -> Self {
+    pub fn new(def: &GameDefinition, visit_order: VisitOrder) -> Self {
         Self {
+            visit_order,
             occupancy: OccupancyGrid::new(),
             attack_layers: vec![ForbiddenSet::default(); def.pieces.len()],
             respected_attackers: respected_attackers(def),
@@ -109,7 +110,7 @@ impl Simulation {
         let moves = &def.piece(piece_id).piece.valid_moves;
         let (x, y) = xy;
         for &(dx, dy) in moves {
-            let attacked = xy_to_index(x + dx, y + dy);
+            let attacked = self.visit_order.xy_to_index(x + dx, y + dy);
             #[cfg(feature = "place_profile")]
             if crate::place_profile::profiling_active() {
                 crate::place_profile::push_forbidden_record(piece_id, attacked);
@@ -201,7 +202,7 @@ impl Simulation {
                     #[cfg(feature = "place_profile")]
                     crate::place_profile::note_scan_forbidden_tail_skip();
                     cursor = word_end;
-                    xy = index_to_xy(word_end);
+                    xy = self.visit_order.index_to_xy(word_end);
                     if cursor == u32::MAX {
                         self.cursors[piece_id] = cursor;
                         self.cursor_positions[piece_id] = xy;
@@ -214,7 +215,7 @@ impl Simulation {
             }
 
             cursor = next;
-            xy = spiral_step(xy);
+            xy = self.visit_order.scan_step_xy(cursor - 1, xy);
             #[cfg(feature = "place_profile")]
             crate::place_profile::note_scan_single_step_reject();
 
@@ -484,7 +485,7 @@ fn threatened_for(def: &GameDefinition) -> Vec<Vec<PieceId>> {
 impl FromWorld for Simulation {
     fn from_world(world: &mut World) -> Self {
         let def = world.resource::<GameDefinition>();
-        Simulation::new(def)
+        Simulation::new(def, VisitOrder::default())
     }
 }
 
@@ -492,7 +493,7 @@ impl FromWorld for Simulation {
 mod tests {
     use super::*;
     use crate::model::GameDefinition;
-    use crate::spiral::index_to_xy;
+    use crate::spiral::{index_to_xy, xy_to_index};
     use std::collections::HashSet;
 
     const GOLDEN_TURNS: [usize; 3] = [64, 1_024, 10_000];
@@ -514,7 +515,7 @@ mod tests {
     }
 
     fn run_turns(def: &GameDefinition, turns: usize) -> Simulation {
-        let mut sim = Simulation::new(def);
+        let mut sim = Simulation::new(def, VisitOrder::default());
         for _ in 0..turns {
             assert!(sim.step_turn(def));
         }
@@ -537,7 +538,7 @@ mod tests {
     }
 
     fn collect_rejection_stats(def: &GameDefinition, total_turns: usize, late_window: usize) -> RejectionStats {
-        let mut sim = Simulation::new(def);
+        let mut sim = Simulation::new(def, VisitOrder::default());
         let mut late_rejections = Vec::with_capacity(late_window.min(total_turns));
         let mut max_rejections = 0u32;
         let mut max_rejections_turn = 0usize;
@@ -780,7 +781,7 @@ mod tests {
     #[test]
     fn hot_path_vec_capacity_growth_is_bounded() {
         let def = GameDefinition::king_6_clique();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         let mut capacity_events = 0usize;
 
         for _ in 0..100_000 {
@@ -828,7 +829,7 @@ mod tests {
     #[test]
     fn early_red_black_placements() {
         let def = GameDefinition::knight_2_pairwise();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         for _ in 0..6 {
             sim.step_turn(&def);
         }
@@ -841,7 +842,7 @@ mod tests {
     #[test]
     fn forbidden_cells_are_cached_per_piece() {
         let def = GameDefinition::knight_2_pairwise();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         sim.step_turn(&def);
         sim.step_turn(&def);
 
@@ -939,7 +940,7 @@ mod tests {
         }
 
         fn survey_preset(name: &str, def: &GameDefinition, turns: usize) -> Survey {
-            let mut sim = Simulation::new(def);
+            let mut sim = Simulation::new(def, VisitOrder::default());
             let mut s = Survey {
                 placements: 0,
                 max_abs_xy: 0,
@@ -1049,7 +1050,7 @@ mod tests {
 
         let moves: &[(i32, i32)] = &PieceDef::knight().valid_moves;
         let def = GameDefinition::knight_2_pairwise();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         let mut placements_xy: Vec<(u32, (i32, i32))> = Vec::with_capacity(100_000);
         for _ in 0..100_000 {
             assert!(sim.step_turn(&def));

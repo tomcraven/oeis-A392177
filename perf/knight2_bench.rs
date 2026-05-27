@@ -5,6 +5,7 @@ use std::io::{self, Write};
 use std::time::Instant;
 
 use red_black_knights::model::GameDefinition;
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 
 fn placement_checksum(placements: &[(u32, usize)]) -> u64 {
@@ -30,7 +31,7 @@ fn main() {
 
     let def = GameDefinition::knight_2_pairwise();
     let start = Instant::now();
-    let mut sim = Simulation::new(&def);
+    let mut sim = Simulation::new(&def, VisitOrder::default());
     for _ in 0..turns {
         if !sim.step_turn(&def) {
             eprintln!("simulation stopped early at {} placements", sim.placements.len());

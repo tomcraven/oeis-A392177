@@ -5,9 +5,9 @@ use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 use crate::CELL_SIZE;
 use crate::model::GameDefinition;
 use crate::model::PieceId;
+use crate::index_order::VisitOrder;
 use crate::sim::{EMPTY_ARMY_SLOT, OccupancyGrid};
 use crate::sim_worker::SimulationBridge;
-use crate::spiral::xy_to_index;
 use crate::ui::BoardColourMode;
 use crate::viewport::{GridBounds, ViewportState, grid_to_world};
 
@@ -22,6 +22,7 @@ pub struct RenderAssets {
 pub struct RenderCache {
     pub rendered_bounds: Option<GridBounds>,
     pub colour_mode: BoardColourMode,
+    pub visit_order: VisitOrder,
     /// Reused RGBA buffer for grid-sized redraws (avoids alloc at max zoom).
     scratch_rgba: Vec<u8>,
 }
@@ -108,6 +109,7 @@ fn draw_spiral_cells_inner(
     };
     let grid_size = grid_texture_size(bounds);
     let colour_mode = ui_state.board_colour_mode;
+    let visit_order = ui_state.visit_order;
 
     const GPU_TEXTURE_DIMENSION_LIMIT: u32 = 16_000;
     if grid_size.x > GPU_TEXTURE_DIMENSION_LIMIT || grid_size.y > GPU_TEXTURE_DIMENSION_LIMIT {
@@ -117,6 +119,7 @@ fn draw_spiral_cells_inner(
     if !viewport.render_dirty
         && cache.rendered_bounds == Some(bounds)
         && cache.colour_mode == colour_mode
+        && cache.visit_order == visit_order
     {
         return;
     }
@@ -144,6 +147,7 @@ fn draw_spiral_cells_inner(
             &piece_px,
             empty_px,
             colour_mode,
+            visit_order,
             &mut cache.scratch_rgba,
         );
     };
@@ -195,6 +199,7 @@ fn draw_spiral_cells_inner(
 
     cache.rendered_bounds = Some(bounds);
     cache.colour_mode = colour_mode;
+    cache.visit_order = visit_order;
     viewport.render_dirty = false;
 }
 
@@ -218,6 +223,7 @@ pub fn raster_spiral_grid(
         &piece_px,
         rgba8_to_u32(empty_color),
         colour_mode,
+        VisitOrder::default(),
         &mut data,
     );
     data
@@ -231,6 +237,7 @@ pub fn raster_spiral_grid_into(
     piece_colors_u32: &[u32],
     empty_pixel: u32,
     colour_mode: BoardColourMode,
+    visit_order: VisitOrder,
     data: &mut [u8],
 ) {
     fill_rgba_buffer_u32(data, empty_pixel);
@@ -246,15 +253,30 @@ pub fn raster_spiral_grid_into(
                         width,
                         occupancy,
                         piece_colors_u32,
+                        visit_order,
                         data,
                     );
                 } else {
-                    raster_piece_rows_sequential(bounds, width, occupancy, piece_colors_u32, data);
+                    raster_piece_rows_sequential(
+                        bounds,
+                        width,
+                        occupancy,
+                        piece_colors_u32,
+                        visit_order,
+                        data,
+                    );
                 }
             }
             #[cfg(target_family = "wasm")]
             {
-                raster_piece_rows_sequential(bounds, width, occupancy, piece_colors_u32, data);
+                raster_piece_rows_sequential(
+                    bounds,
+                    width,
+                    occupancy,
+                    piece_colors_u32,
+                    visit_order,
+                    data,
+                );
             }
         }
     }
@@ -265,11 +287,12 @@ fn raster_piece_rows_sequential(
     width: u32,
     occupancy: &OccupancyGrid,
     piece_colors_u32: &[u32],
+    visit_order: VisitOrder,
     data: &mut [u8],
 ) {
     let cells = occupancy.cells_slice();
     for y in bounds.min_y..=bounds.max_y {
-        raster_one_row(y, bounds, width, cells, piece_colors_u32, data);
+        raster_one_row(y, bounds, width, cells, piece_colors_u32, visit_order, data);
     }
 }
 
@@ -279,6 +302,7 @@ fn raster_piece_rows_parallel(
     width: u32,
     occupancy: &OccupancyGrid,
     piece_colors_u32: &[u32],
+    visit_order: VisitOrder,
     data: &mut [u8],
 ) {
     use std::thread;
@@ -305,7 +329,15 @@ fn raster_piece_rows_parallel(
             scope.spawn(move || {
                 let data = unsafe { std::slice::from_raw_parts_mut(base_ptr as *mut u8, len) };
                 for y in y_start..=y_end {
-                    raster_one_row(y, bounds, width, cells, piece_colors_u32, data);
+                    raster_one_row(
+                        y,
+                        bounds,
+                        width,
+                        cells,
+                        piece_colors_u32,
+                        visit_order,
+                        data,
+                    );
                 }
             });
         }
@@ -318,6 +350,7 @@ fn raster_one_row(
     width: u32,
     cells: &[PieceId],
     piece_colors_u32: &[u32],
+    visit_order: VisitOrder,
     data: &mut [u8],
 ) {
     let py = (bounds.max_y - y) as u32;
@@ -326,7 +359,7 @@ fn raster_one_row(
     let pixel_stride = width as usize;
 
     for x in bounds.min_x..=bounds.max_x {
-        let index = xy_to_index(x, y) as usize;
+        let index = visit_order.xy_to_index(x, y) as usize;
         let piece_id = match cells.get(index) {
             Some(&id) if id != EMPTY_ARMY_SLOT => id,
             _ => continue,
@@ -436,12 +469,13 @@ pub fn raster_checksum(data: &[u8]) -> u64 {
 mod tests {
     use super::*;
     use crate::model::GameDefinition;
+    use crate::index_order::VisitOrder;
     use crate::sim::Simulation;
     use std::time::Instant;
 
     fn run_sim_placements(preset: fn() -> GameDefinition, turns: usize) -> OccupancyGrid {
         let def = preset();
-        let mut sim = Simulation::new(&def);
+        let mut sim = Simulation::new(&def, VisitOrder::default());
         for _ in 0..turns {
             assert!(sim.step_turn(&def));
         }

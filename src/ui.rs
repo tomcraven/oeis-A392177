@@ -10,6 +10,7 @@ use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
 #[cfg(not(target_family = "wasm"))]
 use crate::CELL_SIZE;
+use crate::index_order::VisitOrder;
 use crate::model::{Piece, GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
@@ -69,12 +70,18 @@ pub struct SidebarSections {
     pub pieces_advanced: bool,
     #[serde(default)]
     pub debug: bool,
+    /// Cell visit order for simulation growth (Evolution section).
+    #[serde(default)]
+    pub evolution: bool,
 }
 
 #[derive(Resource)]
 pub struct UiState {
     pub draft: Option<GameDefinition>,
     pub board_colour_mode: BoardColourMode,
+    pub visit_order: VisitOrder,
+    /// Last visit order applied to the simulation worker (ephemeral).
+    pub visit_order_applied: VisitOrder,
     pub random_gen: RandomGenConfig,
     pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
@@ -111,6 +118,8 @@ impl Default for UiState {
         Self {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
+            visit_order: VisitOrder::default(),
+            visit_order_applied: VisitOrder::default(),
             random_gen: RandomGenConfig::default(),
             random_pieces_config: RandomPiecesConfig::default(),
             mutate_piece: 0,
@@ -491,6 +500,39 @@ pub fn ui_game_definition(
                             }
                         }
                     });
+                    ui_state.sidebar.evolution = sidebar_collapsing(
+                        ui,
+                        "evolution",
+                        "Evolution",
+                        ui_state.sidebar.evolution,
+                        false,
+                        |ui| {
+                            sidebar_field_label(ui, "Visit order");
+                            let prev = ui_state.visit_order;
+                            egui::ComboBox::from_id_salt("visit_order")
+                                .selected_text(ui_state.visit_order.label())
+                                .show_ui(ui, |ui| {
+                                    for order in VisitOrder::ALL {
+                                        ui.selectable_value(
+                                            &mut ui_state.visit_order,
+                                            order,
+                                            order.label(),
+                                        );
+                                    }
+                                });
+                            ui.horizontal(|ui| {
+                                if ui.button("◀ Previous").clicked() {
+                                    ui_state.visit_order = ui_state.visit_order.prev();
+                                }
+                                if ui.button("Next ▶").clicked() {
+                                    ui_state.visit_order = ui_state.visit_order.next();
+                                }
+                            });
+                            if ui_state.visit_order != prev {
+                                viewport.render_dirty = true;
+                            }
+                        },
+                    );
                     ui_state.sidebar.library = sidebar_collapsing(
                         ui,
                         "library",
@@ -1331,7 +1373,15 @@ pub fn ui_game_definition(
     if !draft.same_sim_state(def.as_ref()) {
         dedupe_moves(&mut draft);
         *def = draft.clone();
-        sim.request_reset(def.clone());
+        sim.request_reset(def.clone(), ui_state.visit_order);
+        ui_state.visit_order_applied = ui_state.visit_order;
+        cache.rendered_bounds = None;
+        viewport.bounds = None;
+        viewport.target_index = 0;
+        viewport.render_dirty = true;
+    } else if ui_state.visit_order != ui_state.visit_order_applied {
+        sim.request_reset(def.clone(), ui_state.visit_order);
+        ui_state.visit_order_applied = ui_state.visit_order;
         cache.rendered_bounds = None;
         viewport.bounds = None;
         viewport.target_index = 0;

@@ -9,6 +9,7 @@ use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::{SavedColor, SavedGameDefinition};
 use crate::model::GameDefinition;
 use crate::random_gen::{RandomGenConfig, RandomPiecesConfig};
+use crate::index_order::VisitOrder;
 use crate::ui::{BoardColourMode, SidebarSections, UiState};
 use crate::viewport::ViewportState;
 
@@ -33,6 +34,8 @@ pub struct SavedUiState {
     pub sidebar: SidebarSections,
     #[serde(default)]
     pub board_colour_mode: BoardColourMode,
+    #[serde(default)]
+    pub visit_order: VisitOrder,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -72,6 +75,7 @@ pub fn capture_session(
             roster_remove_piece: ui_state.roster_remove_piece,
             add_piece_color: SavedColor::from_bevy(ui_state.add_piece_color),
             board_colour_mode: ui_state.board_colour_mode,
+            visit_order: ui_state.visit_order,
             bookmark_selected,
             sidebar: ui_state.sidebar.clone(),
         },
@@ -92,6 +96,8 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.roster_remove_piece = saved.roster_remove_piece.min(n.saturating_sub(1));
     ui_state.add_piece_color = saved.add_piece_color.to_bevy();
     ui_state.board_colour_mode = saved.board_colour_mode;
+    ui_state.visit_order = saved.visit_order;
+    ui_state.visit_order_applied = saved.visit_order;
     ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
