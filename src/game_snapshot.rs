@@ -17,6 +17,12 @@ pub struct SavedArmy {
     pub color: SavedColor,
     pub valid_moves: Vec<[i32; 2]>,
     pub blocked_by: Vec<ArmyId>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -51,6 +57,7 @@ impl SavedGameDefinition {
                         .map(|&(x, y)| [x, y])
                         .collect(),
                     blocked_by: a.blocked_by.clone(),
+                    enabled: a.enabled,
                 })
                 .collect(),
             turn_order: def.turn_order.clone(),
@@ -91,6 +98,7 @@ impl From<SavedGameDefinition> for GameDefinition {
                             .collect(),
                     },
                     blocked_by: a.blocked_by,
+                    enabled: a.enabled,
                 })
                 .collect(),
             turn_order: saved.turn_order,

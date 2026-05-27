@@ -107,14 +107,15 @@ mod threaded {
             updated
         }
 
-        pub fn needs_work(&self, target_index: u32) -> bool {
+        pub fn needs_work(&self, def: &GameDefinition, target_index: u32) -> bool {
             if self.display.cursors.is_empty() {
                 return false;
             }
-            self.display
-                .cursors
-                .iter()
-                .any(|&cursor| cursor <= target_index)
+            self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
+                def.armies
+                    .get(id)
+                    .is_some_and(|a| a.enabled && cursor <= target_index)
+            })
         }
 
         pub fn is_busy(&self) -> bool {
@@ -202,7 +203,7 @@ mod threaded {
             let start = Instant::now();
             let mut turns = 0u32;
 
-            while sim.needs_work(target_index) {
+            while sim.needs_work(def, target_index) {
                 if !sim.step_turn(def) {
                     break;
                 }
@@ -337,20 +338,21 @@ impl SimulationBridge {
         self.sim
             .advance_for_duration(&self.def, self.target_index, self.budget);
         self.display = display_from_sim(&self.sim);
-        if !self.sim.needs_work(self.target_index) {
+        if !self.sim.needs_work(&self.def, self.target_index) {
             self.advance_in_flight = false;
         }
         true
     }
 
-    pub fn needs_work(&self, target_index: u32) -> bool {
+    pub fn needs_work(&self, def: &GameDefinition, target_index: u32) -> bool {
         if self.display.cursors.is_empty() {
             return false;
         }
-        self.display
-            .cursors
-            .iter()
-            .any(|&cursor| cursor <= target_index)
+        self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
+            def.armies
+                .get(id)
+                .is_some_and(|a| a.enabled && cursor <= target_index)
+        })
     }
 
     pub fn is_busy(&self) -> bool {

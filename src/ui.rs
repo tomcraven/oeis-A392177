@@ -15,7 +15,10 @@ use crate::mutate::{
     shared_attack_extent_for_armies, shift_attacks, toggle_random_attack_square,
     toggle_random_blocked_by,
 };
-use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
+use crate::random_gen::{
+    AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig,
+    generate_random_game, generate_random_pieces_game,
+};
 use crate::render::{RenderCache, grid_texture_size};
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
@@ -50,8 +53,10 @@ pub struct SidebarSections {
     pub presets: bool,
     #[serde(default)]
     pub bookmarks: bool,
+    #[serde(default, alias = "random_generator")]
+    pub random_attacks: bool,
     #[serde(default)]
-    pub random_generator: bool,
+    pub random_pieces: bool,
     #[serde(default)]
     pub mutate: bool,
     #[serde(default)]
@@ -71,6 +76,7 @@ pub struct UiState {
     pub draft: Option<GameDefinition>,
     pub board_colour_mode: BoardColourMode,
     pub random_gen: RandomGenConfig,
+    pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
     pub mutate_army: usize,
     pub mutate_all: bool,
@@ -90,8 +96,12 @@ pub struct UiState {
     pub sidebar: SidebarSections,
     /// Short-lived status after exporting the board (sidebar View section).
     pub export_status: Option<String>,
-    /// Paste buffer for import share code (View section).
+    /// Buffer for the import share-code dialog.
     pub share_code_input: String,
+    /// Import dialog submitted (WASM DOM path); decode/apply after the sidebar pass.
+    pub share_code_import_pending: bool,
+    /// Native: egui import dialog visible.
+    pub share_code_import_dialog_open: bool,
     /// egui time (`Context::input`) when copy succeeded; drives brief “Copied!” button label.
     pub share_code_copied_at: Option<f64>,
 }
@@ -102,6 +112,7 @@ impl Default for UiState {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
             random_gen: RandomGenConfig::default(),
+            random_pieces_config: RandomPiecesConfig::default(),
             mutate_army: 0,
             mutate_all: false,
             preset_index: 0,
@@ -114,6 +125,8 @@ impl Default for UiState {
             sidebar: SidebarSections::default(),
             export_status: None,
             share_code_input: String::new(),
+            share_code_import_pending: false,
+            share_code_import_dialog_open: false,
             share_code_copied_at: None,
         }
     }
@@ -148,6 +161,93 @@ fn preset_index_for_def(def: &GameDefinition) -> Option<usize> {
         .enumerate()
         .find(|(_, (_, factory))| factory().same_sim_state(def))
         .map(|(i, _)| i)
+}
+
+fn import_share_code_from_text(
+    code: &str,
+    def: &mut GameDefinition,
+    sim: &mut SimulationBridge,
+    ui_state: &mut UiState,
+    viewport: &mut ViewportState,
+    cache: &mut RenderCache,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+    draft: &mut GameDefinition,
+) {
+    match share_code::decode_share_code(code.trim()) {
+        Ok(snapshot) => {
+            share_code::apply_share_snapshot(
+                &snapshot,
+                def,
+                sim,
+                ui_state,
+                viewport,
+                cache,
+                camera_q,
+                preset_index_for_def,
+            );
+            *draft = def.clone();
+        }
+        Err(_) => {}
+    }
+}
+
+#[cfg(not(target_family = "wasm"))]
+fn share_code_import_egui_dialog(
+    ctx: &egui::Context,
+    ui_state: &mut UiState,
+    def: &mut GameDefinition,
+    sim: &mut SimulationBridge,
+    viewport: &mut ViewportState,
+    cache: &mut RenderCache,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+    draft: &mut GameDefinition,
+) {
+    if !ui_state.share_code_import_dialog_open {
+        return;
+    }
+
+    let mut close_dialog = false;
+    let mut import_clicked = false;
+    let window = egui::Window::new("Import share code")
+        .id(egui::Id::new("share_code_import_dialog"))
+        .collapsible(false)
+        .resizable(true)
+        .default_width(480.0)
+        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
+        .show(ctx, |ui| {
+            ui.add(
+                egui::TextEdit::multiline(&mut ui_state.share_code_input)
+                    .desired_rows(5)
+                    .hint_text("rbk:…")
+                    .font(egui::TextStyle::Monospace),
+            );
+            ui.add_space(8.0);
+            ui.horizontal(|ui| {
+                if ui.button("Cancel").clicked() {
+                    close_dialog = true;
+                }
+                if ui.button("Import").clicked() {
+                    import_clicked = true;
+                }
+            });
+        });
+
+    if window.is_none() || close_dialog {
+        ui_state.share_code_import_dialog_open = false;
+    } else if import_clicked {
+        ui_state.share_code_import_dialog_open = false;
+        let code = ui_state.share_code_input.clone();
+        import_share_code_from_text(
+            &code,
+            def,
+            sim,
+            ui_state,
+            viewport,
+            cache,
+            camera_q,
+            draft,
+        );
+    }
 }
 
 fn read_camera_session(
@@ -216,6 +316,8 @@ pub fn ui_game_definition(
     board_export_dialog: NonSend<board_export::BoardExportDialogState>,
     #[cfg(target_family = "wasm")]
     board_export_wasm: Res<board_export::BoardExportWasmJob>,
+    #[cfg(target_family = "wasm")]
+    share_code_paste: Res<crate::wasm_clipboard::WasmShareCodePaste>,
     mut camera_q: Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
@@ -395,28 +497,13 @@ pub fn ui_game_definition(
                                     None => {}
                                 }
                             }
-                            ui.add(
-                                egui::TextEdit::singleline(&mut ui_state.share_code_input)
-                                    .hint_text("Paste share code here…"),
-                            );
                             if ui.button("Import share code").clicked() {
-                                match share_code::decode_share_code(
-                                    ui_state.share_code_input.trim(),
-                                ) {
-                                    Ok(snapshot) => {
-                                        share_code::apply_share_snapshot(
-                                            &snapshot,
-                                            def.as_mut(),
-                                            sim.as_mut(),
-                                            &mut ui_state,
-                                            &mut viewport,
-                                            &mut cache,
-                                            &mut camera_q,
-                                            preset_index_for_def,
-                                        );
-                                        draft = def.as_ref().clone();
-                                    }
-                                    Err(_) => {}
+                                ui_state.share_code_input.clear();
+                                #[cfg(target_family = "wasm")]
+                                share_code_paste.open_paste_dialog("");
+                                #[cfg(not(target_family = "wasm"))]
+                                {
+                                    ui_state.share_code_import_dialog_open = true;
                                 }
                             }
                         },
@@ -517,11 +604,11 @@ pub fn ui_game_definition(
                         });
                     });
 
-                    ui_state.sidebar.random_generator = sidebar_collapsing(
+                    ui_state.sidebar.random_attacks = sidebar_collapsing(
                         ui,
-                        "random_generator",
-                        "Random generator",
-                        ui_state.sidebar.random_generator,
+                        "random_attacks",
+                        "Random attacks",
+                        ui_state.sidebar.random_attacks,
                         false,
                         |ui| {
                         let rg = &mut ui_state.random_gen;
@@ -582,12 +669,114 @@ pub fn ui_game_definition(
                             ui.add_space(4.0);
                             ui.separator();
                             ui.add_space(6.0);
-                            if ui.button("Generate random pieces").clicked() {
+                            if ui.button("Generate random attacks").clicked() {
                                 rg.sanitize();
                                 let mut rng = rand::rng();
                                 draft = generate_random_game(rg, &mut rng);
                             }
                         });
+                    });
+
+                    ui_state.sidebar.random_pieces = sidebar_collapsing(
+                        ui,
+                        "random_pieces",
+                        "Random pieces",
+                        ui_state.sidebar.random_pieces,
+                        false,
+                        |ui| {
+                        let rpc = &mut ui_state.random_pieces_config;
+                        let catalog = PieceDef::piece_catalog();
+
+                        let slot_count = rpc.slots.len();
+                        let mut remove_at: Option<usize> = None;
+                        for slot_i in 0..slot_count {
+                            let mut locked = rpc.slots[slot_i].locked;
+                            let mut catalog_index = rpc.slots[slot_i]
+                                .catalog_index
+                                .min(catalog.len().saturating_sub(1));
+                            let mut color_rgb = {
+                                let c = rpc.slots[slot_i].color.to_bevy().to_srgba();
+                                [c.red, c.green, c.blue]
+                            };
+                            let selected_label = if locked {
+                                catalog
+                                    .get(catalog_index)
+                                    .map(|(name, _)| *name)
+                                    .unwrap_or("?")
+                            } else {
+                                "random"
+                            };
+                            ui.horizontal(|ui| {
+                                if slot_count > 1 {
+                                    let remove = ui
+                                        .add_sized(
+                                            egui::vec2(22.0, 22.0),
+                                            egui::Button::new("X"),
+                                        )
+                                        .on_hover_text("Remove slot")
+                                        .clicked();
+                                    if remove {
+                                        remove_at = Some(slot_i);
+                                    }
+                                }
+                                egui::ComboBox::from_id_salt(format!(
+                                    "random_piece_slot_{slot_i}"
+                                ))
+                                .selected_text(selected_label)
+                                .show_ui(ui, |ui| {
+                                    if ui
+                                        .selectable_label(!locked, "random")
+                                        .clicked()
+                                    {
+                                        locked = false;
+                                    }
+                                    for (ci, (name, _)) in catalog.iter().enumerate() {
+                                        let picked =
+                                            locked && catalog_index == ci;
+                                        if ui.selectable_label(picked, *name).clicked() {
+                                            locked = true;
+                                            catalog_index = ci;
+                                        }
+                                    }
+                                });
+                                if ui.color_edit_button_rgb(&mut color_rgb).changed() {
+                                    rpc.slots[slot_i].color =
+                                        crate::game_snapshot::SavedColor::from_bevy(Color::srgb(
+                                            color_rgb[0],
+                                            color_rgb[1],
+                                            color_rgb[2],
+                                        ));
+                                }
+                            });
+                            rpc.slots[slot_i].locked = locked;
+                            rpc.slots[slot_i].catalog_index = catalog_index;
+                        }
+                        if let Some(i) = remove_at {
+                            rpc.slots.remove(i);
+                        }
+
+                        if rpc.slots.len() < 32 {
+                            if ui
+                                .add_sized(
+                                    egui::vec2(22.0, 22.0),
+                                    egui::Button::new("+"),
+                                )
+                                .on_hover_text("Add slot")
+                                .clicked()
+                            {
+                                let i = rpc.slots.len();
+                                rpc.slots.push(RandomPieceSlot::with_default_color(i));
+                            }
+                        }
+
+                        ui.add_space(4.0);
+                        ui.separator();
+                        ui.add_space(6.0);
+                        if ui.button("Generate random pieces").clicked() {
+                            rpc.sanitize();
+                            let mut rng = rand::rng();
+                            draft = generate_random_pieces_game(rpc, &mut rng);
+                        }
                     });
 
                     ui_state.sidebar.mutate = sidebar_collapsing(
@@ -894,6 +1083,14 @@ pub fn ui_game_definition(
                                     ui.text_edit_singleline(&mut draft.armies[army_idx].name);
                                 });
 
+                                ui.checkbox(
+                                    &mut draft.armies[army_idx].enabled,
+                                    "Enabled",
+                                )
+                                .on_hover_text(
+                                    "Disabled pieces stay in the set but do not take placement turns",
+                                );
+
                                 let rgb = draft.armies[army_idx].color.to_srgba();
                                 let mut arr = [rgb.red, rgb.green, rgb.blue];
                                 if ui.color_edit_button_rgb(&mut arr).changed() {
@@ -998,6 +1195,33 @@ pub fn ui_game_definition(
                 });
         });
     viewport.left_inset_px = panel_response.response.rect.width();
+
+    if ui_state.share_code_import_pending {
+        ui_state.share_code_import_pending = false;
+        let code = ui_state.share_code_input.clone();
+        import_share_code_from_text(
+            &code,
+            def.as_mut(),
+            sim.as_mut(),
+            &mut ui_state,
+            &mut viewport,
+            &mut cache,
+            &mut camera_q,
+            &mut draft,
+        );
+    }
+
+    #[cfg(not(target_family = "wasm"))]
+    share_code_import_egui_dialog(
+        ctx,
+        &mut ui_state,
+        def.as_mut(),
+        sim.as_mut(),
+        &mut viewport,
+        &mut cache,
+        &mut camera_q,
+        &mut draft,
+    );
 
     if !draft.same_sim_state(def.as_ref()) {
         dedupe_moves(&mut draft);

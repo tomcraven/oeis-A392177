@@ -145,7 +145,7 @@ fn simulate(
             }
         }
     }
-    let settled = target_index == 0 || !sim.needs_work(target_index);
+    let settled = target_index == 0 || !sim.needs_work(def, target_index);
     let bounds = bounds_from_placements(&sim.placements, BOUNDS_PADDING);
     let checksum = placement_checksum(&sim.placements);
     let grid_size = grid_texture_size(bounds);

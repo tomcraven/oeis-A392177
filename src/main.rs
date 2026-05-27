@@ -63,6 +63,9 @@ fn main() {
     #[cfg(target_family = "wasm")]
     app.init_resource::<BoardExportWasmJob>();
 
+    #[cfg(target_family = "wasm")]
+    app.init_resource::<red_black_knights::wasm_clipboard::WasmShareCodePaste>();
+
     app.add_systems(
         Startup,
         (
@@ -76,8 +79,13 @@ fn main() {
         )
             .chain(),
     )
-    .add_systems(EguiPrimaryContextPass, ui_game_definition)
-    .add_systems(
+    .add_systems(EguiPrimaryContextPass, ui_game_definition);
+    #[cfg(target_family = "wasm")]
+    app.add_systems(
+        Update,
+        red_black_knights::wasm_clipboard::poll_wasm_share_code_paste,
+    );
+    app.add_systems(
         PostUpdate,
         run_board_export.after(EguiPostUpdateSet::EndPass),
     )

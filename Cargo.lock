@@ -4022,6 +4022,7 @@ dependencies = [
  "base64",
  "bevy",
  "bevy_egui",
+ "crossbeam-channel",
  "dirs",
  "getrandom 0.3.4",
  "getrandom 0.4.2",

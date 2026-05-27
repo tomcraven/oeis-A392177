@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use crate::CELL_SIZE;
 use crate::camera::BoardCamera;
+use crate::model::GameDefinition;
 use crate::sim_worker::SimulationBridge;
 use crate::spiral::xy_to_index;
 
@@ -159,6 +160,7 @@ pub fn sync_board_camera_viewport(
 
 pub fn sync_simulation_to_viewport(
     mut sim: ResMut<SimulationBridge>,
+    def: Res<GameDefinition>,
     mut viewport: ResMut<ViewportState>,
     camera_q: Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: Query<&Window>,
@@ -187,7 +189,7 @@ pub fn sync_simulation_to_viewport(
     if new_target != viewport.target_index {
         viewport.target_index = new_target;
         sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
-    } else if sim.needs_work(viewport.target_index) && !sim.is_busy() {
+    } else if sim.needs_work(def.as_ref(), viewport.target_index) && !sim.is_busy() {
         sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
     }
 }

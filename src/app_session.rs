@@ -8,13 +8,15 @@ use crate::camera::BoardCamera;
 use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::{SavedColor, SavedGameDefinition};
 use crate::model::GameDefinition;
-use crate::random_gen::RandomGenConfig;
+use crate::random_gen::{RandomGenConfig, RandomPiecesConfig};
 use crate::ui::{BoardColourMode, SidebarSections, UiState};
 use crate::viewport::ViewportState;
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedUiState {
     pub random_gen: RandomGenConfig,
+    #[serde(default)]
+    pub random_pieces_config: RandomPiecesConfig,
     pub mutate_army: usize,
     pub mutate_all: bool,
     pub preset_index: usize,
@@ -59,6 +61,7 @@ pub fn capture_session(
         target_index,
         ui: SavedUiState {
             random_gen: ui_state.random_gen.clone(),
+            random_pieces_config: ui_state.random_pieces_config.clone(),
             mutate_army: ui_state.mutate_army,
             mutate_all: ui_state.mutate_all,
             preset_index: ui_state.preset_index,
@@ -78,6 +81,7 @@ pub fn capture_session(
 pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: &SavedUiState) {
     let n = def.armies.len();
     ui_state.random_gen = saved.random_gen.clone();
+    ui_state.random_pieces_config = saved.random_pieces_config.clone();
     ui_state.mutate_all = saved.mutate_all;
     ui_state.mutate_army = saved.mutate_army.min(n.saturating_sub(1));
     ui_state.preset_index = saved.preset_index;

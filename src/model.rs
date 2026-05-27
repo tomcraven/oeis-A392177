@@ -196,6 +196,8 @@ pub struct Army {
     pub piece: PieceDef,
     /// Armies whose pieces block placement on squares they attack.
     pub blocked_by: Vec<ArmyId>,
+    /// When false, this army does not take placement turns (definition kept in roster).
+    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Resource)]
@@ -217,8 +219,17 @@ impl GameDefinition {
         self.turn_order == other.turn_order
             && self.armies.len() == other.armies.len()
             && self.armies.iter().zip(&other.armies).all(|(a, b)| {
-                a.piece == b.piece && a.blocked_by == b.blocked_by
+                a.piece == b.piece && a.blocked_by == b.blocked_by && a.enabled == b.enabled
             })
+    }
+
+    /// Turn-order entries whose armies are enabled.
+    pub fn active_turn_order(&self) -> Vec<ArmyId> {
+        self.turn_order
+            .iter()
+            .copied()
+            .filter(|&id| self.armies.get(id).is_some_and(|a| a.enabled))
+            .collect()
     }
 
     /// Whether sim state and per-army colours match (ignores army names).
@@ -683,6 +694,7 @@ fn army(name: &str, color: Color, piece: PieceDef, blocked_by: Vec<ArmyId>) -> A
         color,
         piece,
         blocked_by,
+        enabled: true,
     }
 }
 

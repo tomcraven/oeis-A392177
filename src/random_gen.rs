@@ -3,6 +3,7 @@ use rand::Rng;
 use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
+use crate::game_snapshot::SavedColor;
 use crate::model::{Army, ArmyId, GameDefinition, PieceDef};
 
 /// Mirror attack cells around the piece (vertical = left/right, horizontal = up/down).
@@ -31,7 +32,7 @@ impl AttackSymmetry {
     }
 }
 
-/// Settings for the “Generate random pieces” action in the UI.
+/// Settings for the “Generate random attacks” action in the UI (blob attack patterns).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct RandomGenConfig {
     pub army_count_min: u32,
@@ -75,6 +76,125 @@ impl RandomGenConfig {
         self.attack_radius_min = self.attack_radius_min.max(1);
         self.attack_radius_max = self.attack_radius_max.max(self.attack_radius_min);
         self.pattern_density = self.pattern_density.clamp(0.0, 1.0);
+    }
+}
+
+/// One army slot when generating from the piece catalog: fixed piece or random catalog entry.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RandomPieceSlot {
+    #[serde(default)]
+    pub locked: bool,
+    /// Index into [`PieceDef::piece_catalog`] when [`Self::locked`] is true.
+    #[serde(default)]
+    pub catalog_index: usize,
+    #[serde(default = "default_random_slot_color")]
+    pub color: SavedColor,
+}
+
+fn default_random_slot_color() -> SavedColor {
+    SavedColor::from_bevy(GameDefinition::default_army_color(0))
+}
+
+impl Default for RandomPieceSlot {
+    fn default() -> Self {
+        Self {
+            locked: false,
+            catalog_index: 0,
+            color: default_random_slot_color(),
+        }
+    }
+}
+
+impl RandomPieceSlot {
+    pub fn with_default_color(index: usize) -> Self {
+        Self {
+            color: SavedColor::from_bevy(GameDefinition::default_army_color(index)),
+            ..Self::default()
+        }
+    }
+}
+
+/// Slot list for “Generate random pieces” (catalog pieces, not random attack blobs).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct RandomPiecesConfig {
+    #[serde(default = "default_random_piece_slots")]
+    pub slots: Vec<RandomPieceSlot>,
+}
+
+fn default_random_piece_slots() -> Vec<RandomPieceSlot> {
+    vec![
+        RandomPieceSlot {
+            locked: true,
+            catalog_index: 0,
+            color: SavedColor::from_bevy(GameDefinition::default_army_color(0)),
+        },
+        RandomPieceSlot {
+            locked: false,
+            catalog_index: 0,
+            color: SavedColor::from_bevy(GameDefinition::default_army_color(1)),
+        },
+    ]
+}
+
+impl Default for RandomPiecesConfig {
+    fn default() -> Self {
+        Self {
+            slots: default_random_piece_slots(),
+        }
+    }
+}
+
+impl RandomPiecesConfig {
+    pub fn sanitize(&mut self) {
+        let catalog_len = PieceDef::piece_catalog().len().max(1);
+        if self.slots.is_empty() {
+            self.slots = default_random_piece_slots();
+        }
+        self.slots.truncate(32);
+        for slot in &mut self.slots {
+            slot.catalog_index = slot.catalog_index.min(catalog_len - 1);
+        }
+    }
+}
+
+pub fn generate_random_pieces_game(
+    config: &RandomPiecesConfig,
+    rng: &mut impl Rng,
+) -> GameDefinition {
+    let mut cfg = config.clone();
+    cfg.sanitize();
+    let catalog = PieceDef::piece_catalog();
+    let n = cfg.slots.len();
+
+    let armies: Vec<Army> = cfg
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(i, slot)| {
+            let catalog_index = if slot.locked {
+                slot.catalog_index
+            } else {
+                rng.random_range(0..catalog.len())
+            };
+            let (name, factory) = catalog[catalog_index];
+            let piece = factory();
+            let blocked_by = all_other_armies(i, n);
+            Army {
+                name: name.to_string(),
+                color: slot.color.to_bevy(),
+                piece,
+                blocked_by,
+                enabled: true,
+            }
+        })
+        .collect();
+
+    let mut turn_order: Vec<ArmyId> = (0..n).collect();
+    turn_order.shuffle(rng);
+
+    GameDefinition {
+        armies,
+        turn_order,
     }
 }
 
@@ -122,6 +242,7 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
                 color: colors[i],
                 piece,
                 blocked_by,
+                enabled: true,
             }
         })
         .collect();
@@ -460,5 +581,29 @@ mod tests {
             }
             assert_eq!(army.blocked_by, all_other_armies(i, 3));
         }
+    }
+
+    #[test]
+    fn random_pieces_locked_slot_uses_catalog_piece() {
+        let knight = PieceDef::knight();
+        let cfg = RandomPiecesConfig {
+            slots: vec![
+                RandomPieceSlot {
+                    locked: true,
+                    catalog_index: 0,
+                    ..RandomPieceSlot::with_default_color(0)
+                },
+                RandomPieceSlot {
+                    locked: false,
+                    catalog_index: 0,
+                    ..RandomPieceSlot::with_default_color(1)
+                },
+            ],
+        };
+        let mut rng = StdRng::seed_from_u64(7);
+        let def = generate_random_pieces_game(&cfg, &mut rng);
+        assert_eq!(def.armies.len(), 2);
+        assert_eq!(def.armies[0].piece, knight);
+        assert_eq!(def.armies[0].name, "knight");
     }
 }

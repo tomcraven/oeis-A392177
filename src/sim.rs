@@ -142,11 +142,12 @@ impl Simulation {
         def: &GameDefinition,
         cells_examined: &mut u32,
     ) -> bool {
-        let turn_order_len = def.turn_order.len();
+        let active = def.active_turn_order();
+        let turn_order_len = active.len();
         if turn_order_len == 0 {
             return false;
         }
-        let army_id = def.turn_order[self.turn_order_index];
+        let army_id = active[self.turn_order_index];
         self.turn_order_index += 1;
         if self.turn_order_index == turn_order_len {
             self.turn_order_index = 0;
@@ -222,18 +223,22 @@ impl Simulation {
         }
     }
 
-    pub fn needs_work(&self, target_index: u32) -> bool {
+    pub fn needs_work(&self, def: &GameDefinition, target_index: u32) -> bool {
         if self.cursors.is_empty() {
             return false;
         }
-        self.cursors.iter().any(|&c| c <= target_index)
+        self.cursors.iter().enumerate().any(|(id, &c)| {
+            def.armies
+                .get(id)
+                .is_some_and(|a| a.enabled && c <= target_index)
+        })
     }
 
     pub fn advance_to_target(&mut self, def: &GameDefinition, target_index: u32) {
-        if def.armies.is_empty() || def.turn_order.is_empty() {
+        if def.armies.is_empty() || def.active_turn_order().is_empty() {
             return;
         }
-        while self.needs_work(target_index) {
+        while self.needs_work(def, target_index) {
             if !self.step_turn(def) {
                 break;
             }
@@ -246,12 +251,12 @@ impl Simulation {
         target_index: u32,
         max_duration: Duration,
     ) {
-        if def.armies.is_empty() || def.turn_order.is_empty() {
+        if def.armies.is_empty() || def.active_turn_order().is_empty() {
             return;
         }
         let start = Instant::now();
         let mut turns_since_check = 0u32;
-        while self.needs_work(target_index) {
+        while self.needs_work(def, target_index) {
             if !self.step_turn(def) {
                 break;
             }

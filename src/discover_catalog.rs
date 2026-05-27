@@ -257,6 +257,7 @@ fn army(name: &str, color: Color, piece: PieceDef, blocked_by: Vec<ArmyId>) -> A
         color,
         piece,
         blocked_by,
+        enabled: true,
     }
 }
 
