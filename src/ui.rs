@@ -9,7 +9,7 @@ use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
 use crate::camera_config::CameraSessionConfig;
 use crate::calibration_config;
 use crate::CELL_SIZE;
-use crate::model::{GameDefinition, PieceDef};
+use crate::model::{Army, GameDefinition, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
     shared_attack_extent_for_armies, shift_attacks, toggle_random_attack_square,
@@ -77,6 +77,8 @@ pub struct UiState {
     pub preset_index: usize,
     /// Piece shown in the nested Advanced editor under Pieces.
     pub edit_army: usize,
+    /// When true, attack-square grid toggles apply to every piece in the set.
+    pub sync_attack_squares: bool,
     /// Name for the next bookmark (sidebar Bookmarks section).
     pub bookmark_new_name: String,
     /// Selected entry in [`PieceDef::piece_catalog`] for roster add.
@@ -104,6 +106,7 @@ impl Default for UiState {
             mutate_all: false,
             preset_index: 0,
             edit_army: 0,
+            sync_attack_squares: false,
             bookmark_new_name: String::new(),
             add_piece_preset_index: 0,
             roster_remove_army: 0,
@@ -887,24 +890,6 @@ pub fn ui_game_definition(
                                         draft.armies.len().saturating_sub(1);
                                 }
                                 let army_idx = ui_state.edit_army;
-                                egui::ComboBox::from_id_salt("army_edit_pick")
-                                    .selected_text(format!(
-                                        "{}: {}",
-                                        army_idx, draft.armies[army_idx].name
-                                    ))
-                                    .show_ui(ui, |ui| {
-                                        for (aid, army) in draft.armies.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(
-                                                    army_idx == aid,
-                                                    format!("{aid}: {}", army.name),
-                                                )
-                                                .clicked()
-                                            {
-                                                ui_state.edit_army = aid;
-                                            }
-                                        }
-                                    });
 
                                 ui.horizontal(|ui| {
                                     ui.label("Name");
@@ -918,11 +903,21 @@ pub fn ui_game_definition(
                                         Color::srgb(arr[0], arr[1], arr[2]);
                                 }
 
-                                ui.label("Attacked squares");
+                                ui.horizontal(|ui| {
+                                    ui.label("Attacked squares");
+                                    ui.checkbox(
+                                        &mut ui_state.sync_attack_squares,
+                                        "Sync all pieces",
+                                    )
+                                    .on_hover_text(
+                                        "When enabled, each square toggle applies to every piece",
+                                    );
+                                });
                                 move_grid_ui(
                                     ui,
                                     army_idx,
-                                    &mut draft.armies[army_idx].piece.valid_moves,
+                                    &mut draft.armies,
+                                    ui_state.sync_attack_squares,
                                 );
 
                                 ui.label("Blocked by");
@@ -1394,8 +1389,25 @@ fn move_grid_preview_ui(
     .inner
 }
 
-fn move_grid_ui(ui: &mut egui::Ui, army_idx: usize, moves: &mut Vec<(i32, i32)>) -> bool {
-    let radius = move_grid_radius(moves, 4);
+fn set_attack_square(moves: &mut Vec<(i32, i32)>, x: i32, y: i32, on: bool) {
+    if on {
+        if !moves.iter().any(|&m| m == (x, y)) {
+            moves.push((x, y));
+        }
+    } else {
+        moves.retain(|&m| m != (x, y));
+    }
+    moves.sort_by_key(|&(x, y)| (x, y));
+    moves.dedup();
+}
+
+fn move_grid_ui(
+    ui: &mut egui::Ui,
+    army_idx: usize,
+    armies: &mut [Army],
+    sync_all: bool,
+) -> bool {
+    let radius = move_grid_radius(&armies[army_idx].piece.valid_moves, 4);
     let cell_size = egui::Vec2::splat(22.0);
     let mut changed = false;
 
@@ -1412,7 +1424,11 @@ fn move_grid_ui(ui: &mut egui::Ui, army_idx: usize, moves: &mut Vec<(i32, i32)>)
                             continue;
                         }
 
-                        let move_idx = moves.iter().position(|&m| m == (x, y));
+                        let move_idx = armies[army_idx]
+                            .piece
+                            .valid_moves
+                            .iter()
+                            .position(|&m| m == (x, y));
                         let selected = move_idx.is_some();
                         let label = if selected { "x" } else { "" };
                         let mut button = egui::Button::new(label).min_size(cell_size);
@@ -1425,10 +1441,23 @@ fn move_grid_ui(ui: &mut egui::Ui, army_idx: usize, moves: &mut Vec<(i32, i32)>)
                             .on_hover_text(format!("({x}, {y})"))
                             .clicked()
                         {
-                            if let Some(idx) = move_idx {
-                                moves.remove(idx);
+                            let on = move_idx.is_none();
+                            if sync_all {
+                                for army in armies.iter_mut() {
+                                    set_attack_square(
+                                        &mut army.piece.valid_moves,
+                                        x,
+                                        y,
+                                        on,
+                                    );
+                                }
                             } else {
-                                moves.push((x, y));
+                                set_attack_square(
+                                    &mut armies[army_idx].piece.valid_moves,
+                                    x,
+                                    y,
+                                    on,
+                                );
                             }
                             changed = true;
                         }
@@ -1438,9 +1467,5 @@ fn move_grid_ui(ui: &mut egui::Ui, army_idx: usize, moves: &mut Vec<(i32, i32)>)
             });
     });
 
-    if changed {
-        moves.sort_by_key(|&(x, y)| (x, y));
-        moves.dedup();
-    }
     changed
 }
