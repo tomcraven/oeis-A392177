@@ -25,6 +25,7 @@ These changes are in the tree; they do **not** alter board zoom visuals:
 - **Scan loop word cache (2026-05-26)** — cache active forbidden `u64` across `spiral_step` advances within a word; inline same-word tail skip (no closure); `get`-style membership checks; drop unreachable `word_end == 0` branch.
 - **`step_turn_scan` const-generic counter (2026-05-26)** — `COUNT_CELLS` monomorphization drops per-iteration `cells_examined` increments on the release `step_turn` path; rejection diagnostics call `step_turn_scan::<true>` from tests only.
 - **`ForbiddenSet::insert` hot path (2026-05-26)** — branch on `word_index < words.len()` before `resize`; late-game fanout mostly ORs into existing words.
+- **`ActiveTurnOrder` (2026-05-27)** — `active_turn_order()` returns a lazy view (`iter` / `get` / `len`) instead of allocating a `Vec`; dense path indexes `turn_order` when every entry is enabled.
 
 ## Left in stash (changes visuals or GPU risk)
 
@@ -376,3 +377,9 @@ At 100k turns, place replay is ~2.5–3 ms total — attack indexing is a large 
 4. **Do nothing** — current `xy_to_index` loop is hard to beat on a **single** playthrough without shipping precomputed data.
 
 **Not recommended:** ring-only LUT, per-index memo during play, or repeating coordinate LUT without a new access pattern (e.g. index-major static table).
+
+## Kept (2026-05-27 perf pass — turn-order borrow)
+
+Session baseline for A/B: `TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, medians with per-turn `active_turn_order()` alloc: `knight_2_pairwise` 5.489, `knight_3_clique` 5.630, `leaper_4_mixed_clique` 5.826, `king_6_clique` 9.980, `chimera_3_clique` 7.336 ms. Checksums unchanged; `cargo testd` passed.
+
+**Change:** `ActiveTurnOrder` lazy view (`GameDefinition::active_turn_order()`) with dense fast path over `turn_order` (not a cached copy on `Simulation` — differs from the 2026-05-25 rejected `turn_order` cache). Confirming run medians: **3.078 / 2.965 / 3.125 / 3.147 / 4.261 ms** (~44–68% vs baseline above on the same session). Prior doc timings (~2.5–4 ms post–attack-layers) align with this fast path; the allocating `active_turn_order()` call per turn had become a large regression vs those numbers.

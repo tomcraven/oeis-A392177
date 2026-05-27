@@ -207,6 +207,58 @@ pub struct GameDefinition {
     pub turn_order: Vec<ArmyId>,
 }
 
+/// Enabled entries from [`GameDefinition::turn_order`] without building a `Vec`.
+pub struct ActiveTurnOrder<'a> {
+    def: &'a GameDefinition,
+    /// Every `turn_order` id is an enabled army — index directly into `turn_order`.
+    dense: bool,
+}
+
+impl<'a> ActiveTurnOrder<'a> {
+    fn new(def: &'a GameDefinition) -> Self {
+        let dense = !def.turn_order.is_empty()
+            && def
+                .turn_order
+                .iter()
+                .all(|&id| def.armies.get(id).is_some_and(|a| a.enabled));
+        Self { def, dense }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        if self.def.turn_order.is_empty() {
+            return true;
+        }
+        if self.dense {
+            return false;
+        }
+        self.iter().next().is_none()
+    }
+
+    pub fn len(&self) -> usize {
+        if self.dense {
+            self.def.turn_order.len()
+        } else {
+            self.iter().count()
+        }
+    }
+
+    pub fn get(&self, index: usize) -> Option<ArmyId> {
+        if self.dense {
+            self.def.turn_order.get(index).copied()
+        } else {
+            self.iter().nth(index)
+        }
+    }
+
+    pub fn iter(&self) -> impl Iterator<Item = ArmyId> + '_ {
+        self.def
+            .turn_order
+            .iter()
+            .copied()
+            .filter(|&id| self.def.armies.get(id).is_some_and(|a| a.enabled))
+    }
+}
+
 impl Default for GameDefinition {
     fn default() -> Self {
         Self::knight_2_pairwise()
@@ -223,13 +275,9 @@ impl GameDefinition {
             })
     }
 
-    /// Turn-order entries whose armies are enabled.
-    pub fn active_turn_order(&self) -> Vec<ArmyId> {
-        self.turn_order
-            .iter()
-            .copied()
-            .filter(|&id| self.armies.get(id).is_some_and(|a| a.enabled))
-            .collect()
+    /// Enabled armies in turn order (lazy filter; no allocation on the hot path).
+    pub fn active_turn_order(&self) -> ActiveTurnOrder<'_> {
+        ActiveTurnOrder::new(self)
     }
 
     /// Whether sim state and per-army colours match (ignores army names).

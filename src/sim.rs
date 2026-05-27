@@ -147,7 +147,9 @@ impl Simulation {
         if turn_order_len == 0 {
             return false;
         }
-        let army_id = active[self.turn_order_index];
+        let army_id = active
+            .get(self.turn_order_index)
+            .expect("turn_order_index in range");
         self.turn_order_index += 1;
         if self.turn_order_index == turn_order_len {
             self.turn_order_index = 0;
