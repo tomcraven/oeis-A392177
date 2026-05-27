@@ -239,13 +239,18 @@ pub fn raster_spiral_grid_into(
         BoardColourMode::Piece => {
             #[cfg(not(target_family = "wasm"))]
             {
-                raster_piece_rows_parallel(
-                    bounds,
-                    width,
-                    occupancy,
-                    piece_colors_u32,
-                    data,
-                );
+                const PARALLEL_RASTER_MIN_CELLS: u32 = 262_144;
+                if width.saturating_mul(_height) >= PARALLEL_RASTER_MIN_CELLS {
+                    raster_piece_rows_parallel(
+                        bounds,
+                        width,
+                        occupancy,
+                        piece_colors_u32,
+                        data,
+                    );
+                } else {
+                    raster_piece_rows_sequential(bounds, width, occupancy, piece_colors_u32, data);
+                }
             }
             #[cfg(target_family = "wasm")]
             {
@@ -255,7 +260,6 @@ pub fn raster_spiral_grid_into(
     }
 }
 
-#[cfg(target_family = "wasm")]
 fn raster_piece_rows_sequential(
     bounds: GridBounds,
     width: u32,

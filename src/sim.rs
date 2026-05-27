@@ -27,6 +27,8 @@ pub struct Simulation {
     attack_layers: Vec<ForbiddenSet>,
     /// For each defender piece, attackers whose `attack_layers` are OR'd during its scan.
     respected_attackers: Vec<Vec<PieceId>>,
+    /// Enabled turn order captured with the definition-derived simulation metadata.
+    active_turn_order: Vec<PieceId>,
     pub cursors: Vec<u32>,
     cursor_positions: Vec<(i32, i32)>,
     /// Rolling cursor into `turn_order`; avoids a modulo in every simulated turn.
@@ -41,6 +43,7 @@ impl Simulation {
             occupancy: OccupancyGrid::new(),
             attack_layers: vec![ForbiddenSet::default(); def.pieces.len()],
             respected_attackers: respected_attackers(def),
+            active_turn_order: active_turn_order(def),
             cursors: vec![0; def.pieces.len()],
             cursor_positions: vec![(0, 0); def.pieces.len()],
             turn_order_index: 0,
@@ -60,6 +63,7 @@ impl Simulation {
             self.attack_layers = vec![ForbiddenSet::default(); piece_count];
         }
         self.respected_attackers = respected_attackers(def);
+        self.active_turn_order = active_turn_order(def);
         resize_piece_vectors(&mut self.cursors, piece_count, 0);
         resize_piece_vectors(&mut self.cursor_positions, piece_count, (0, 0));
         self.turn_order_index = 0;
@@ -145,14 +149,11 @@ impl Simulation {
         def: &GameDefinition,
         cells_examined: &mut u32,
     ) -> bool {
-        let active = def.active_turn_order();
-        let turn_order_len = active.len();
+        let turn_order_len = self.active_turn_order.len();
         if turn_order_len == 0 {
             return false;
         }
-        let piece_id = active
-            .get(self.turn_order_index)
-            .expect("turn_order_index in range");
+        let piece_id = self.active_turn_order[self.turn_order_index];
         self.turn_order_index += 1;
         if self.turn_order_index == turn_order_len {
             self.turn_order_index = 0;
@@ -240,7 +241,7 @@ impl Simulation {
     }
 
     pub fn advance_to_target(&mut self, def: &GameDefinition, target_index: u32) {
-        if def.pieces.is_empty() || def.active_turn_order().is_empty() {
+        if def.pieces.is_empty() || self.active_turn_order.is_empty() {
             return;
         }
         while self.needs_work(def, target_index) {
@@ -256,7 +257,7 @@ impl Simulation {
         target_index: u32,
         max_duration: Duration,
     ) {
-        if def.pieces.is_empty() || def.active_turn_order().is_empty() {
+        if def.pieces.is_empty() || self.active_turn_order.is_empty() {
             return;
         }
         self.occupancy.ensure_unique_for_mutation();
@@ -422,6 +423,10 @@ fn respected_attackers(def: &GameDefinition) -> Vec<Vec<PieceId>> {
         }
     }
     respected
+}
+
+fn active_turn_order(def: &GameDefinition) -> Vec<PieceId> {
+    def.active_turn_order().iter().collect()
 }
 
 fn combined_forbidden_word(

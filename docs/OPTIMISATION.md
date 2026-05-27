@@ -422,3 +422,39 @@ Users can zoom to the viewport cap (~4096 half-extent → **~67M** visible cells
 **Kept:** none — tree unchanged for spiral/sim.
 
 **Still-agnostic directions (not implemented):** incremental grid raster (interactive); any representation change that avoids per-move `(x,y)→index` without piece-specific tables (large sim change). Do not re-open runtime coordinate LUT or scan loop occupancy/forbidden reorder without a new hypothesis.
+
+## Kept (2026-05-27 GPT perf pass — active turn order / raster threshold)
+
+**Sim:** `Simulation` now caches the active, enabled turn order alongside other definition-derived metadata (`respected_attackers`) on `new` / `reset`. This differs from the earlier rejected cached-turn-order experiment by caching only the filtered active order after the attack-layer changes; it removes the per-turn `active_turn_order()` dense/enabled scan from `step_turn_scan`.
+
+`TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, `cargo rund --release --bin time_sim`; checksums unchanged:
+
+| Case | start median | final median | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.892 | **2.854** | −1% |
+| `knight_3_clique` | 2.897 | **2.894** | ~0% |
+| `leaper_4_mixed_clique` | 3.189 | **2.933** | −8% |
+| `king_6_clique` | 3.295 | **3.012** | −9% |
+| `chimera_3_clique` | 4.317 | **4.182** | −3% |
+
+**Render:** Native grid raster now uses sequential row painting below 262k visible cells and keeps parallel row bands for large grids. This avoids thread-spawn overhead on normal redraws without changing the max-zoom path.
+
+`PERF_RENDER_ITERS=15`, `cargo rund --release --bin perf_render`; checksums unchanged:
+
+| Case | start median | final median | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_tight` | 0.151 | **0.004** | −97% |
+| `knight_3_wide` | 0.164 | **0.067** | −59% |
+| `king_6_wide` | 0.165 | **0.047** | −72% |
+| `max_zoom_grid` | 14.741 | **14.748** | ~0% |
+
+## What did not work (2026-05-27 GPT sim pass — algorithm checks)
+
+Session baseline with the active-turn-order cache in tree: `TIME_SIM_ITERS=25`, `TIME_SIM_WARMUP=3`, medians `knight_2_pairwise` 2.803, `knight_3_clique` 3.049, `leaper_4_mixed_clique` 3.050, `king_6_clique` 3.124, `chimera_3_clique` 4.528 ms. Checksums unchanged on all A/B runs.
+
+- **Cursor-only scan loop** — keep only the spiral index while rejecting cells and call `index_to_xy(cursor)` only on placement / failure. This removes ~1–2 `spiral_step`s per placement, but one `index_to_xy` on every successful turn is more expensive. Regressed all medians (e.g. `knight_2_pairwise` 3.462 ms, `king_6_clique` 3.618 ms); reverted.
+- **Runtime index-major attack tables per distinct move set** — lazily fill `index -> attacked indices` rows and share them across identical pieces. Correct, but filling rows during the run costs more than saved `xy_to_index` calls, especially for mixed move sets (`leaper_4_mixed_clique` 13.287 ms, `chimera_3_clique` 7.510 ms); reverted. This supports the earlier conclusion that attack tables only make sense if precomputed offline / shipped with an explicit binary-size tradeoff.
+- **Skip forbidden inserts for already-occupied attacked cells** — semantically redundant because occupancy permanently blocks those cells, but the extra occupancy lookup on every attack regressed most medians (`leaper_4_mixed_clique` 3.614 ms, `king_6_clique` 3.382 ms); reverted.
+- **Late-game-gated idempotent `ForbiddenSet::insert`** — retry of skip-if-set only after `turn_step >= 16_384`, based on high redundant-bit rates. The gate did not avoid the branch/read cost; representative medians regressed (`knight_2_pairwise` 3.196 ms, `king_6_clique` 3.251 ms); reverted.
+
+**Kept:** none in this second sim-only pass. The exact algorithm still appears constrained by first-legal spiral order plus per-placement attack indexing. Fundamental changes left on the table are deliberately larger: offline precomputed attack tables, piece-specific closed-form attack indexing, or a different forbidden representation that avoids per-move `(x,y) -> index` without adding per-scan cost.
