@@ -1,0 +1,17 @@
+{
+  "preset": "knight_2_pairwise",
+  "turns": 20000000,
+  "note": "Same scale as src/a392177_2.py with N=10**7 and K=2 (K*N placements).",
+  "generated_at": "2026-05-27T07:41:07.105529+00:00",
+  "match": true,
+  "checksum": 7660866890175480613,
+  "black_last_index": 20238376,
+  "red_last_index": 20244730,
+  "python": {
+    "elapsed_s": 56.27905312500661
+  },
+  "rust": {
+    "elapsed_s": 0.486116
+  },
+  "speedup_rust_vs_python": 115.8
+}

@@ -1,0 +1,49 @@
+{
+  "preset": "knight_2_pairwise",
+  "reference": "src/a392177_2.py logic in perf/python_reference.py",
+  "rust_bin": "perf_knight2",
+  "generated_at": "2026-05-27T07:39:01.517905+00:00",
+  "cases": [
+    {
+      "turns": 64,
+      "python_checksum": 15737156276822775461,
+      "rust_checksum": 15737156276822775461,
+      "match": true,
+      "black_last_index": 99,
+      "red_last_index": 115
+    },
+    {
+      "turns": 1024,
+      "python_checksum": 5149276635673381925,
+      "rust_checksum": 5149276635673381925,
+      "match": true,
+      "black_last_index": 1402,
+      "red_last_index": 1500
+    },
+    {
+      "turns": 10000,
+      "python_checksum": 561431110996648581,
+      "rust_checksum": 561431110996648581,
+      "match": true,
+      "black_last_index": 12061,
+      "red_last_index": 12186
+    },
+    {
+      "turns": 100000,
+      "python_checksum": 6661495926608663269,
+      "rust_checksum": 6661495926608663269,
+      "match": true,
+      "black_last_index": 109390,
+      "red_last_index": 108381
+    },
+    {
+      "turns": 500000,
+      "python_checksum": 16645974596488180453,
+      "rust_checksum": 16645974596488180453,
+      "match": true,
+      "black_last_index": 530467,
+      "red_last_index": 531582
+    }
+  ],
+  "rust_golden_turns_note": "64/1024/10000 checksums are locked in sim.rs representative_preset_checksums_are_stable"
+}

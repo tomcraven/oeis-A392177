@@ -27,6 +27,10 @@ path = "src/bin/discover_rerender.rs"
 name = "discover_reference"
 path = "src/bin/discover_reference.rs"
 
+[[bin]]
+name = "perf_knight2"
+path = "perf/knight2_bench.rs"
+
 [dependencies]
 bevy = { version = "0.18.1", default-features = false, features = [
     "bevy_asset",
