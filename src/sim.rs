@@ -1,4 +1,4 @@
-use crate::model::{PieceId, GameDefinition};
+use crate::model::{GameDefinition, PieceId};
 
 pub use crate::index_order::{IndexOrder, SquareSpiral, VisitOrder};
 use bevy::prelude::{FromWorld, Resource, World};
@@ -79,8 +79,7 @@ impl Simulation {
         if crate::place_profile::profiling_active() {
             let moves = def.piece(piece_id).piece.valid_moves.len() as u64;
             crate::place_profile::note_placement_work(moves, 1);
-            let place_start = crate::place_profile::timing_enabled_for_place()
-                .then(Instant::now);
+            let place_start = crate::place_profile::timing_enabled_for_place().then(Instant::now);
             crate::place_profile::time_occupancy_insert(|| {
                 self.occupancy.insert(index, piece_id);
             });
@@ -169,8 +168,7 @@ impl Simulation {
         // Locals avoid re-indexing `cursors`/`cursor_positions` on every scanned cell.
         let mut cursor = self.cursors[piece_id];
         let mut xy = self.cursor_positions[piece_id];
-        let mut forb_word =
-            combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+        let mut forb_word = combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
 
         loop {
             if COUNT_CELLS {
@@ -226,8 +224,7 @@ impl Simulation {
             }
 
             if (cursor & 63) == 0 {
-                forb_word =
-                    combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+                forb_word = combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
             }
         }
     }
@@ -374,12 +371,7 @@ impl ForbiddenSet {
     #[cfg(test)]
     fn contains_index(&self, index: u32) -> bool {
         let bit = 1u64 << (index & 63);
-        self.words
-            .get(index as usize >> 6)
-            .copied()
-            .unwrap_or(0)
-            & bit
-            != 0
+        self.words.get(index as usize >> 6).copied().unwrap_or(0) & bit != 0
     }
 
     fn word_bits(&self, word_index: usize) -> u64 {
@@ -537,7 +529,11 @@ mod tests {
         mean_rejections: f64,
     }
 
-    fn collect_rejection_stats(def: &GameDefinition, total_turns: usize, late_window: usize) -> RejectionStats {
+    fn collect_rejection_stats(
+        def: &GameDefinition,
+        total_turns: usize,
+        late_window: usize,
+    ) -> RejectionStats {
         let mut sim = Simulation::new(def, VisitOrder::default());
         let mut late_rejections = Vec::with_capacity(late_window.min(total_turns));
         let mut max_rejections = 0u32;
@@ -607,7 +603,10 @@ mod tests {
         let preset_cases: [(&str, fn() -> GameDefinition); 5] = [
             ("knight_2_pairwise", GameDefinition::knight_2_pairwise),
             ("knight_3_clique", GameDefinition::knight_3_clique),
-            ("leaper_4_mixed_clique", GameDefinition::leaper_4_mixed_clique),
+            (
+                "leaper_4_mixed_clique",
+                GameDefinition::leaper_4_mixed_clique,
+            ),
             ("king_6_clique", GameDefinition::king_6_clique),
             ("chimera_3_clique", GameDefinition::chimera_3_clique),
         ];
@@ -624,10 +623,7 @@ mod tests {
         }
 
         let random_configs: [(&str, RandomGenConfig); 4] = [
-            (
-                "random_default",
-                RandomGenConfig::default(),
-            ),
+            ("random_default", RandomGenConfig::default()),
             (
                 "random_dense_clique_like",
                 RandomGenConfig {
@@ -672,8 +668,12 @@ mod tests {
                 let mut rng = StdRng::seed_from_u64(seed);
                 let def = generate_random_game(&cfg, &mut rng);
                 let label = format!("{cfg_name}_seed{seed}_pieces{}", def.pieces.len());
-                let stats = collect_rejection_stats(&def, RANDOM_TURNS, LATE_WINDOW.min(RANDOM_TURNS));
-                eprintln!("{}", format_rejection_stats(&label, &stats, LATE_WINDOW.min(RANDOM_TURNS)));
+                let stats =
+                    collect_rejection_stats(&def, RANDOM_TURNS, LATE_WINDOW.min(RANDOM_TURNS));
+                eprintln!(
+                    "{}",
+                    format_rejection_stats(&label, &stats, LATE_WINDOW.min(RANDOM_TURNS))
+                );
                 if stats.max_rejections > global_max {
                     global_max = stats.max_rejections;
                     global_max_label = label;
@@ -770,12 +770,12 @@ mod tests {
     }
 
     fn backing_capacities(sim: &Simulation) -> (usize, usize, usize) {
-        let forb: usize = sim
-            .attack_layers
-            .iter()
-            .map(|f| f.words.capacity())
-            .sum();
-        (sim.occupancy.cells.capacity(), sim.placements.capacity(), forb)
+        let forb: usize = sim.attack_layers.iter().map(|f| f.words.capacity()).sum();
+        (
+            sim.occupancy.cells.capacity(),
+            sim.placements.capacity(),
+            forb,
+        )
     }
 
     #[test]
@@ -990,10 +990,11 @@ mod tests {
                         }
                         _ => {}
                     }
-                    match s
-                        .ring_offset_delta_keys
-                        .get(&(place_ro.ring, place_ro.offset, slot as u8))
-                    {
+                    match s.ring_offset_delta_keys.get(&(
+                        place_ro.ring,
+                        place_ro.offset,
+                        slot as u8,
+                    )) {
                         Some(prev) if *prev != d => s.ring_offset_delta_conflicts += 1,
                         None => {
                             s.ring_offset_delta_keys
@@ -1039,7 +1040,11 @@ mod tests {
 
         let king = GameDefinition::king_6_clique();
         let chimera = GameDefinition::chimera_3_clique();
-        survey_preset("knight_2_pairwise", &GameDefinition::knight_2_pairwise(), 100_000);
+        survey_preset(
+            "knight_2_pairwise",
+            &GameDefinition::knight_2_pairwise(),
+            100_000,
+        );
         survey_preset("king_6_clique", &king, 100_000);
         survey_preset("chimera_3_clique", &chimera, 100_000);
 
@@ -1058,7 +1063,9 @@ mod tests {
             placements_xy.push((index, index_to_xy(index)));
         }
         let max_index = placements_xy.iter().map(|(i, _)| *i).max().unwrap();
-        eprintln!("\n=== attack table vs xy_to_index (knight, 100k placements, max_index={max_index}) ===");
+        eprintln!(
+            "\n=== attack table vs xy_to_index (knight, 100k placements, max_index={max_index}) ==="
+        );
 
         let mut table = vec![[0u32; 8]; max_index as usize + 1];
         let t0 = Instant::now();

@@ -1,7 +1,12 @@
 //! Monotonic cell visit order: each `u32` index maps to one board cell `(x, y)`.
 //!
-//! [`VisitOrder`] is selected in the sidebar and drives simulation, rendering, and viewport
-//! targeting. The default [`VisitOrder::SquareSpiral`] uses the same fast path as [`crate::spiral`].
+//! [`VisitOrder`] selects how the simulation scans the board when placing pieces, and must
+//! match rendering and viewport index mapping. The default [`VisitOrder::SquareSpiral`] uses
+//! the same fast path as [`crate::spiral`].
+//!
+//! This module keeps alternative orderings for experiments, share-code import, and benchmarks.
+//! There is no sidebar UI to pick them; the running app uses [`VisitOrder::default()`] unless
+//! a share snapshot or code path sets another order on the simulation.
 
 use std::fmt;
 
@@ -22,14 +27,32 @@ pub enum VisitOrder {
     SquareRingsScanline,
     /// Manhattan rings (`|x| + |y|`); within each ring, sort by `x` then `|y|`.
     DiamondRings,
+    /// Morton (Z-order) curve — fractal square clusters, not ring or spiral fronts.
+    MortonZOrder,
+    /// Z-order with bit-reversed coordinates (scrambled fractal).
+    MortonBitReversed,
+    /// Z-order on binary Gray-coded coordinates.
+    MortonGrayCode,
+    /// Z-order with index byte-swapped before decode.
+    MortonIndexByteswap,
+    /// Z-order with index XOR `0x5555_5555` before decode.
+    MortonIndexXor,
+    /// Manhattan rings; within each ring, sort by `y` then `x`.
+    DiamondRingsYFirst,
 }
 
 impl VisitOrder {
-    pub const ALL: [VisitOrder; 4] = [
+    pub const ALL: [VisitOrder; 10] = [
         VisitOrder::SquareSpiral,
         VisitOrder::SquareSpiralClockwise,
         VisitOrder::SquareRingsScanline,
         VisitOrder::DiamondRings,
+        VisitOrder::MortonZOrder,
+        VisitOrder::MortonBitReversed,
+        VisitOrder::MortonGrayCode,
+        VisitOrder::MortonIndexByteswap,
+        VisitOrder::MortonIndexXor,
+        VisitOrder::DiamondRingsYFirst,
     ];
 
     pub fn label(self) -> &'static str {
@@ -38,14 +61,17 @@ impl VisitOrder {
             Self::SquareSpiralClockwise => "Square spiral (CW)",
             Self::SquareRingsScanline => "Square rings (scanline)",
             Self::DiamondRings => "Diamond rings (Manhattan)",
+            Self::MortonZOrder => "Z-order (Morton)",
+            Self::MortonBitReversed => "Z-order (index bit-reversed)",
+            Self::MortonGrayCode => "Z-order (index Gray)",
+            Self::MortonIndexByteswap => "Z-order (index byteswap)",
+            Self::MortonIndexXor => "Z-order (index XOR)",
+            Self::DiamondRingsYFirst => "Diamond rings (y-first)",
         }
     }
 
     fn slot(self) -> usize {
-        Self::ALL
-            .iter()
-            .position(|&o| o == self)
-            .unwrap_or(0)
+        Self::ALL.iter().position(|&o| o == self).unwrap_or(0)
     }
 
     pub fn prev(self) -> Self {
@@ -65,6 +91,12 @@ impl VisitOrder {
             Self::SquareSpiralClockwise => index_to_xy_clockwise(index),
             Self::SquareRingsScanline => index_to_xy_square_rings_scanline(index),
             Self::DiamondRings => index_to_xy_diamond_rings(index),
+            Self::MortonZOrder => morton_decode(index),
+            Self::MortonBitReversed => morton_index_bitreversed_decode(index),
+            Self::MortonGrayCode => morton_index_gray_decode(index),
+            Self::MortonIndexByteswap => morton_index_byteswap_decode(index),
+            Self::MortonIndexXor => morton_index_xor_decode(index),
+            Self::DiamondRingsYFirst => index_to_xy_diamond_y_first(index),
         }
     }
 
@@ -75,6 +107,12 @@ impl VisitOrder {
             Self::SquareSpiralClockwise => xy_to_index_clockwise(x, y),
             Self::SquareRingsScanline => xy_to_index_square_rings_scanline(x, y),
             Self::DiamondRings => xy_to_index_diamond_rings(x, y),
+            Self::MortonZOrder => morton_encode(x, y),
+            Self::MortonBitReversed => morton_index_bitreversed_encode(x, y),
+            Self::MortonGrayCode => morton_index_gray_encode(x, y),
+            Self::MortonIndexByteswap => morton_index_byteswap_encode(x, y),
+            Self::MortonIndexXor => morton_index_xor_encode(x, y),
+            Self::DiamondRingsYFirst => xy_to_index_diamond_y_first(x, y),
         }
     }
 
@@ -83,10 +121,14 @@ impl VisitOrder {
         match self {
             Self::SquareSpiral => spiral::spiral_step(xy),
             Self::SquareSpiralClockwise => cw_scan_step_from_index(index),
-            Self::SquareRingsScanline => {
-                index_to_xy_square_rings_scanline(index.wrapping_add(1))
-            }
+            Self::SquareRingsScanline => index_to_xy_square_rings_scanline(index.wrapping_add(1)),
             Self::DiamondRings => diamond_scan_step(xy),
+            Self::MortonZOrder => morton_decode(index.wrapping_add(1)),
+            Self::MortonBitReversed => morton_index_bitreversed_decode(index.wrapping_add(1)),
+            Self::MortonGrayCode => morton_index_gray_decode(index.wrapping_add(1)),
+            Self::MortonIndexByteswap => morton_index_byteswap_decode(index.wrapping_add(1)),
+            Self::MortonIndexXor => morton_index_xor_decode(index.wrapping_add(1)),
+            Self::DiamondRingsYFirst => diamond_y_first_scan_step(index),
         }
     }
 }
@@ -135,11 +177,7 @@ pub type DefaultIndexOrder = SquareSpiral;
 
 #[inline(always)]
 fn chebyshev_ring_start(ring: u32) -> u32 {
-    if ring == 0 {
-        0
-    } else {
-        (2 * ring - 1).pow(2)
-    }
+    if ring == 0 { 0 } else { (2 * ring - 1).pow(2) }
 }
 
 #[inline(always)]
@@ -177,16 +215,9 @@ fn chebyshev_ring_for_index(index: u32) -> u32 {
     }
 }
 
-/// Scanline order on Chebyshev ring `r`: bottom row, vertical sides, top row.
 #[inline(always)]
-fn index_to_xy_square_rings_scanline(index: u32) -> (i32, i32) {
-    if index == 0 {
-        return (0, 0);
-    }
-    let r = chebyshev_ring_for_index(index);
+fn index_to_xy_square_rings_scanline_on_ring(r: u32, o: u32) -> (i32, i32) {
     let ri = r as i32;
-    let start = chebyshev_ring_start(r);
-    let o = index - start;
     let top = 2 * r + 1;
     if o < top {
         return (-ri + o as i32, -ri);
@@ -201,6 +232,17 @@ fn index_to_xy_square_rings_scanline(index: u32) -> (i32, i32) {
     }
     let x = -ri + (o - mid_end) as i32;
     (x, ri)
+}
+
+/// Scanline order on Chebyshev ring `r`: bottom row, vertical sides, top row.
+#[inline(always)]
+fn index_to_xy_square_rings_scanline(index: u32) -> (i32, i32) {
+    if index == 0 {
+        return (0, 0);
+    }
+    let r = chebyshev_ring_for_index(index);
+    let start = chebyshev_ring_start(r);
+    index_to_xy_square_rings_scanline_on_ring(r, index - start)
 }
 
 #[inline(always)]
@@ -222,6 +264,191 @@ fn xy_to_index_square_rings_scanline(x: i32, y: i32) -> u32 {
         top + 2 * row + u32::from(x == ri)
     };
     start + offset
+}
+
+#[inline(always)]
+fn morton_spread(n: u32) -> u32 {
+    let mut n = n;
+    n = (n | (n << 8)) & 0x00FF_00FF;
+    n = (n | (n << 4)) & 0x0F0F_0F0F;
+    n = (n | (n << 2)) & 0x3333_3333;
+    n = (n | (n << 1)) & 0x5555_5555;
+    n
+}
+
+#[inline(always)]
+fn morton_compact(n: u32) -> u32 {
+    let mut n = n & 0x5555_5555;
+    n = (n | (n >> 1)) & 0x3333_3333;
+    n = (n | (n >> 2)) & 0x0F0F_0F0F;
+    n = (n | (n >> 4)) & 0x00FF_00FF;
+    n = (n | (n >> 8)) & 0x0000_FFFF;
+    n
+}
+
+#[inline(always)]
+fn morton_wire_coord(c: i32) -> u32 {
+    (c as u32) ^ 0x8000_0000
+}
+
+#[inline(always)]
+fn morton_unwire_coord(w: u32) -> i32 {
+    (w ^ 0x8000_0000) as i32
+}
+
+#[inline(always)]
+fn morton_encode(x: i32, y: i32) -> u32 {
+    if x == 0 && y == 0 {
+        return 0;
+    }
+    morton_spread(morton_wire_coord(x)) | (morton_spread(morton_wire_coord(y)) << 1)
+}
+
+#[inline(always)]
+fn morton_decode(code: u32) -> (i32, i32) {
+    if code == 0 {
+        return (0, 0);
+    }
+    let x = morton_unwire_coord(morton_compact(code));
+    let y = morton_unwire_coord(morton_compact(code >> 1));
+    (x, y)
+}
+
+#[inline(always)]
+fn bit_reverse_u32(mut v: u32) -> u32 {
+    v = ((v >> 1) & 0x5555_5555) | ((v & 0x5555_5555) << 1);
+    v = ((v >> 2) & 0x3333_3333) | ((v & 0x3333_3333) << 2);
+    v = ((v >> 4) & 0x0F0F_0F0F) | ((v & 0x0F0F_0F0F) << 4);
+    v = ((v >> 8) & 0x00FF_00FF) | ((v & 0x00FF_00FF) << 8);
+    v.rotate_right(16)
+}
+
+#[inline(always)]
+fn gray_encode_u32(u: u32) -> u32 {
+    u ^ (u >> 1)
+}
+
+#[inline(always)]
+fn gray_decode_u32(mut g: u32) -> u32 {
+    let mut mask = g >> 1;
+    while mask != 0 {
+        g ^= mask;
+        mask >>= 1;
+    }
+    g
+}
+
+#[inline(always)]
+fn morton_index_bitreversed_encode(x: i32, y: i32) -> u32 {
+    if x == 0 && y == 0 {
+        return 0;
+    }
+    bit_reverse_u32(morton_encode(x, y))
+}
+
+#[inline(always)]
+fn morton_index_bitreversed_decode(index: u32) -> (i32, i32) {
+    if index == 0 {
+        return (0, 0);
+    }
+    morton_decode(bit_reverse_u32(index))
+}
+
+#[inline(always)]
+fn morton_index_gray_encode(x: i32, y: i32) -> u32 {
+    if x == 0 && y == 0 {
+        return 0;
+    }
+    gray_encode_u32(morton_encode(x, y))
+}
+
+#[inline(always)]
+fn morton_index_gray_decode(index: u32) -> (i32, i32) {
+    if index == 0 {
+        return (0, 0);
+    }
+    morton_decode(gray_decode_u32(index))
+}
+
+#[inline(always)]
+fn morton_index_byteswap_encode(x: i32, y: i32) -> u32 {
+    let code = morton_encode(x, y);
+    if code == 0 { 0 } else { code.swap_bytes() }
+}
+
+#[inline(always)]
+fn morton_index_byteswap_decode(code: u32) -> (i32, i32) {
+    if code == 0 {
+        (0, 0)
+    } else {
+        morton_decode(code.swap_bytes())
+    }
+}
+
+const MORTON_INDEX_XOR_MASK: u32 = 0x5555_5555;
+
+#[inline(always)]
+fn morton_index_xor_encode(x: i32, y: i32) -> u32 {
+    if x == 0 && y == 0 {
+        return 0;
+    }
+    morton_encode(x, y) ^ MORTON_INDEX_XOR_MASK
+}
+
+#[inline(always)]
+fn morton_index_xor_decode(index: u32) -> (i32, i32) {
+    if index == 0 {
+        return (0, 0);
+    }
+    morton_decode(index ^ MORTON_INDEX_XOR_MASK)
+}
+
+#[inline(always)]
+fn index_to_xy_diamond_y_first(index: u32) -> (i32, i32) {
+    if index == 0 {
+        return (0, 0);
+    }
+    let d = diamond_ring_for_index(index);
+    let di = d as i32;
+    let start = diamond_ring_start(d);
+    let offset = index - start;
+    if offset == 0 {
+        return (0, -di);
+    }
+    if offset == 4 * d - 1 {
+        return (0, di);
+    }
+    let k = (offset + 1) / 2;
+    let y = -di + k as i32;
+    let rem = di - y.abs();
+    let side = (offset - 1) & 1;
+    if side == 0 { (-rem, y) } else { (rem, y) }
+}
+
+#[inline(always)]
+fn xy_to_index_diamond_y_first(x: i32, y: i32) -> u32 {
+    let d = (x.abs() + y.abs()) as u32;
+    let start = diamond_ring_start(d);
+    if d == 0 {
+        return 0;
+    }
+    let di = d as i32;
+    if y == -di && x == 0 {
+        return start;
+    }
+    if y == di && x == 0 {
+        return start + 4 * d - 1;
+    }
+    let k = (y + di) as u32;
+    debug_assert!(k >= 1 && k <= 2 * d);
+    let before = 1 + 2 * (k - 1);
+    let side = u32::from(x > 0);
+    start + before + side
+}
+
+#[inline(always)]
+fn diamond_y_first_scan_step(index: u32) -> (i32, i32) {
+    index_to_xy_diamond_y_first(index.wrapping_add(1))
 }
 
 #[inline(always)]
@@ -323,11 +550,7 @@ mod tests {
     fn assert_scan_walk(order: VisitOrder, limit: u32) {
         let mut xy = (0, 0);
         for index in 0..limit {
-            assert_eq!(
-                order.index_to_xy(index),
-                xy,
-                "{order:?} index {index}"
-            );
+            assert_eq!(order.index_to_xy(index), xy, "{order:?} index {index}");
             let at = xy;
             xy = order.scan_step_xy(index, xy);
             assert_eq!(
@@ -391,8 +614,19 @@ mod tests {
         for (i, &order) in VisitOrder::ALL.iter().enumerate() {
             assert_eq!(order.prev().next(), order);
             assert_eq!(order.next().prev(), order);
-            assert_eq!(order.next(), VisitOrder::ALL[(i + 1) % VisitOrder::ALL.len()]);
+            assert_eq!(
+                order.next(),
+                VisitOrder::ALL[(i + 1) % VisitOrder::ALL.len()]
+            );
         }
+    }
+
+    #[test]
+    fn morton_differs_from_spiral_early() {
+        assert_ne!(
+            VisitOrder::SquareSpiral.index_to_xy(5),
+            VisitOrder::MortonZOrder.index_to_xy(5)
+        );
     }
 
     #[test]

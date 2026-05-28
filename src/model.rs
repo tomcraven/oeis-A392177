@@ -656,8 +656,14 @@ impl GameDefinition {
             ("knight_4_clique", GameDefinition::knight_4_clique),
             ("knight_5_clique", GameDefinition::knight_5_clique),
             ("knight_6_clique", GameDefinition::knight_6_clique),
-            ("wazir_ferz_2_pairwise", GameDefinition::wazir_ferz_2_pairwise),
-            ("king_knight_2_pairwise", GameDefinition::king_knight_2_pairwise),
+            (
+                "wazir_ferz_2_pairwise",
+                GameDefinition::wazir_ferz_2_pairwise,
+            ),
+            (
+                "king_knight_2_pairwise",
+                GameDefinition::king_knight_2_pairwise,
+            ),
             (
                 "wazir_ferz_knight_3_clique",
                 GameDefinition::wazir_ferz_knight_3_clique,
@@ -670,14 +676,20 @@ impl GameDefinition {
                 "leaper_5_mixed_clique",
                 GameDefinition::leaper_5_mixed_clique,
             ),
-            ("hippogriff_2_pairwise", GameDefinition::hippogriff_2_pairwise),
+            (
+                "hippogriff_2_pairwise",
+                GameDefinition::hippogriff_2_pairwise,
+            ),
             ("hippogriff_3_clique", GameDefinition::hippogriff_3_clique),
             (
                 "trebuchet_dabbaba_2_pairwise",
                 GameDefinition::trebuchet_dabbaba_2_pairwise,
             ),
             ("orthogonal_3_clique", GameDefinition::orthogonal_3_clique),
-            ("ferz_alfil_2_pairwise", GameDefinition::ferz_alfil_2_pairwise),
+            (
+                "ferz_alfil_2_pairwise",
+                GameDefinition::ferz_alfil_2_pairwise,
+            ),
             ("king_3_clique", GameDefinition::king_3_clique),
             ("king_4_clique", GameDefinition::king_4_clique),
             ("king_6_clique", GameDefinition::king_6_clique),

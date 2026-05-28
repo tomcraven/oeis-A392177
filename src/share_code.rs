@@ -7,6 +7,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::SavedGameDefinition;
+use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::render::RenderCache;
 use crate::sim_worker::SimulationBridge;
@@ -26,6 +27,8 @@ pub struct ShareViewSnapshot {
     pub camera: CameraSessionConfig,
     pub target_index: u32,
     pub board_colour_mode: BoardColourMode,
+    #[serde(default)]
+    pub visit_order: VisitOrder,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -34,6 +37,7 @@ pub struct ShareCapture<'a> {
     pub camera: CameraSessionConfig,
     pub target_index: u32,
     pub board_colour_mode: BoardColourMode,
+    pub visit_order: VisitOrder,
 }
 
 pub fn capture_share_view(input: ShareCapture<'_>) -> ShareViewSnapshot {
@@ -43,6 +47,7 @@ pub fn capture_share_view(input: ShareCapture<'_>) -> ShareViewSnapshot {
         camera: input.camera,
         target_index: input.target_index,
         board_colour_mode: input.board_colour_mode,
+        visit_order: input.visit_order,
     }
 }
 
@@ -55,7 +60,9 @@ pub fn encode_share_code(snapshot: &ShareViewSnapshot) -> Result<String, String>
     }
     let json = serde_json::to_vec(snapshot).map_err(|e| e.to_string())?;
     let payload = STANDARD.encode(json);
-    Ok(format!("{SHARE_CODE_PREFIX}{CURRENT_SHARE_VERSION}:{payload}"))
+    Ok(format!(
+        "{SHARE_CODE_PREFIX}{CURRENT_SHARE_VERSION}:{payload}"
+    ))
 }
 
 pub fn decode_share_code(code: &str) -> Result<ShareViewSnapshot, String> {
@@ -78,7 +85,8 @@ pub fn decode_share_code(code: &str) -> Result<ShareViewSnapshot, String> {
 fn decode_share_payload(bytes: &[u8], version: u32) -> Result<ShareViewSnapshot, String> {
     match version {
         1 => {
-            let snap: ShareViewSnapshot = serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
+            let snap: ShareViewSnapshot =
+                serde_json::from_slice(bytes).map_err(|e| e.to_string())?;
             if snap.version != 1 {
                 return Err(format!(
                     "share payload version {} does not match envelope version 1",
@@ -122,9 +130,11 @@ pub fn apply_share_snapshot(
     viewport.render_dirty = true;
     cache.rendered_bounds = None;
 
-    sim.request_reset(def.clone(), ui_state.visit_order);
-    ui_state.visit_order_applied = ui_state.visit_order;
+    sim.request_reset(def.clone(), snapshot.visit_order);
     apply_camera_to_query(&snapshot.camera, camera_q);
+    ui_state
+        .sim_config_history
+        .commit(restored, snapshot.camera);
 }
 
 fn apply_camera_to_query(
@@ -150,6 +160,7 @@ fn apply_camera_to_query(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::index_order::VisitOrder;
     use crate::model::GameDefinition;
 
     #[test]
@@ -164,11 +175,34 @@ mod tests {
             },
             target_index: 99_999,
             board_colour_mode: BoardColourMode::Piece,
+            visit_order: VisitOrder::MortonZOrder,
         });
         let code = encode_share_code(&snap).unwrap();
         assert!(code.starts_with("rbk:1:"));
         let loaded = decode_share_code(&code).unwrap();
         assert_eq!(loaded, snap);
+    }
+
+    #[test]
+    fn share_code_v1_without_visit_order_defaults_to_spiral() {
+        let def = GameDefinition::knight_2_pairwise();
+        let snap = capture_share_view(ShareCapture {
+            def: &def,
+            camera: CameraSessionConfig {
+                x: 0.0,
+                y: 0.0,
+                zoom: 1.0,
+            },
+            target_index: 0,
+            board_colour_mode: BoardColourMode::default(),
+            visit_order: VisitOrder::MortonZOrder,
+        });
+        let mut value = serde_json::to_value(&snap).unwrap();
+        value.as_object_mut().unwrap().remove("visit_order");
+        let bytes = serde_json::to_vec(&value).unwrap();
+        let loaded = decode_share_payload(&bytes, 1).unwrap();
+        assert_eq!(loaded.visit_order, VisitOrder::default());
+        assert_eq!(loaded.target_index, snap.target_index);
     }
 
     #[test]

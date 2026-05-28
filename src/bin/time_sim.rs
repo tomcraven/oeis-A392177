@@ -1,8 +1,8 @@
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use red_black_knights::model::{PieceId, GameDefinition};
 use red_black_knights::index_order::VisitOrder;
+use red_black_knights::model::{GameDefinition, PieceId};
 use red_black_knights::sim::Simulation;
 
 const DEFAULT_WARMUP_ITERS: usize = 2;

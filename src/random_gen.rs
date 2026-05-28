@@ -4,7 +4,7 @@ use rand::seq::SliceRandom;
 use serde::{Deserialize, Serialize};
 
 use crate::game_snapshot::SavedColor;
-use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
+use crate::model::{GameDefinition, Piece, PieceDef, PieceId};
 
 /// Mirror attack cells around the piece (vertical = left/right, horizontal = up/down).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
@@ -175,10 +175,7 @@ pub fn generate_random_pieces_game(
     let catalog = PieceDef::piece_catalog();
     let n = cfg.slots.len();
 
-    let any_random_attack = cfg
-        .slots
-        .iter()
-        .any(|s| !s.locked && s.random_attack);
+    let any_random_attack = cfg.slots.iter().any(|s| !s.locked && s.random_attack);
     let shared_attack = if any_random_attack && attack_cfg.identical_pieces {
         Some(random_attack_pattern(
             rng,
@@ -231,10 +228,7 @@ pub fn generate_random_pieces_game(
     let mut turn_order: Vec<PieceId> = (0..n).collect();
     turn_order.shuffle(rng);
 
-    GameDefinition {
-        pieces,
-        turn_order,
-    }
+    GameDefinition { pieces, turn_order }
 }
 
 pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> GameDefinition {
@@ -289,10 +283,7 @@ pub fn generate_random_game(config: &RandomGenConfig, rng: &mut impl Rng) -> Gam
     let mut turn_order: Vec<PieceId> = (0..n).collect();
     turn_order.shuffle(rng);
 
-    GameDefinition {
-        pieces,
-        turn_order,
-    }
+    GameDefinition { pieces, turn_order }
 }
 
 fn chebyshev(x: i32, y: i32) -> i32 {

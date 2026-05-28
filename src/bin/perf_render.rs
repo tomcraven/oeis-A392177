@@ -2,9 +2,9 @@
 
 use std::time::Instant;
 
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::model::GameDefinition;
 use red_black_knights::render::{grid_texture_size, raster_checksum, raster_spiral_grid};
-use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 use red_black_knights::ui::BoardColourMode;
 use red_black_knights::viewport::GridBounds;
@@ -84,13 +84,12 @@ fn bench_case(
         assert!(sim.step_turn(&def), "{name}: step failed");
     }
     let size = grid_texture_size(bounds);
-    let empty = [
-        31,
-        31,
-        41,
-        255,
-    ];
-    let colors: Vec<[u8; 4]> = def.pieces.iter().map(|a| rgba8_for_tests_from(a.color)).collect();
+    let empty = [31, 31, 41, 255];
+    let colors: Vec<[u8; 4]> = def
+        .pieces
+        .iter()
+        .map(|a| rgba8_for_tests_from(a.color))
+        .collect();
 
     for _ in 0..WARMUP {
         let data = raster_spiral_grid(

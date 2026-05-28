@@ -4,8 +4,8 @@ use std::env;
 use std::io::{self, Write};
 use std::time::Instant;
 
-use red_black_knights::model::GameDefinition;
 use red_black_knights::index_order::VisitOrder;
+use red_black_knights::model::GameDefinition;
 use red_black_knights::sim::Simulation;
 
 fn placement_checksum(placements: &[(u32, usize)]) -> u64 {
@@ -34,14 +34,16 @@ fn main() {
     let mut sim = Simulation::new(&def, VisitOrder::default());
     for _ in 0..turns {
         if !sim.step_turn(&def) {
-            eprintln!("simulation stopped early at {} placements", sim.placements.len());
+            eprintln!(
+                "simulation stopped early at {} placements",
+                sim.placements.len()
+            );
             std::process::exit(1);
         }
     }
     let elapsed_s = start.elapsed().as_secs_f64();
     let checksum = placement_checksum(
-        &sim
-            .placements
+        &sim.placements
             .iter()
             .map(|&(i, a)| (i, a))
             .collect::<Vec<_>>(),

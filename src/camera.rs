@@ -42,10 +42,7 @@ pub struct BoardPointerState {
 }
 
 fn pointer_in_board(pos: Vec2, window: &Window, left_inset_px: f32) -> bool {
-    pos.x >= left_inset_px
-        && pos.x <= window.width()
-        && pos.y >= 0.0
-        && pos.y <= window.height()
+    pos.x >= left_inset_px && pos.x <= window.width() && pos.y >= 0.0 && pos.y <= window.height()
 }
 
 fn screen_delta_to_world(
@@ -121,8 +118,8 @@ pub fn camera_controls(
         let visible_world_width = ortho.area.width();
         let world_per_sec = pan.pan_screen_widths_per_sec * visible_world_width;
         let speed = pan_speed_multiplier(&keyboard);
-        transform.translation += (delta.normalize() * world_per_sec * time.delta_secs() * speed)
-            .extend(0.0);
+        transform.translation +=
+            (delta.normalize() * world_per_sec * time.delta_secs() * speed).extend(0.0);
     }
 }
 
@@ -261,13 +258,7 @@ pub fn camera_pointer_controls(
             if pointer.pan_touch_id == Some(touch.id()) {
                 let delta = touch.delta();
                 if delta != Vec2::ZERO {
-                    apply_board_pan(
-                        &mut transform,
-                        delta * pan_speed,
-                        ortho,
-                        board_w,
-                        board_h,
-                    );
+                    apply_board_pan(&mut transform, delta * pan_speed, ortho, board_w, board_h);
                 }
             }
         } else {
@@ -298,8 +289,7 @@ pub fn clamp_camera_zoom_to_texture_limit(
     let Projection::Orthographic(ref mut ortho) = *projection else {
         return;
     };
-    let safe_max =
-        crate::viewport::max_safe_zoom_out_scale(ortho, window, viewport.left_inset_px);
+    let safe_max = crate::viewport::max_safe_zoom_out_scale(ortho, window, viewport.left_inset_px);
     let budget_cap = if calibration_config::smoke_test_mode() {
         f32::MAX
     } else {

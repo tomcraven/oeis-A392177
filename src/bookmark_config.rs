@@ -146,14 +146,14 @@ fn read_local_storage() -> Option<String> {
 
 #[cfg(target_family = "wasm")]
 fn write_local_storage(text: &str) -> std::io::Result<()> {
-    let window = web_sys::window().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no window")
-    })?;
-    let storage = window.local_storage().map_err(|_| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no localStorage")
-    })?.ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "localStorage disabled")
-    })?;
+    let window = web_sys::window()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no window"))?;
+    let storage = window
+        .local_storage()
+        .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "no localStorage"))?
+        .ok_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::NotFound, "localStorage disabled")
+        })?;
     storage
         .set_item(STORAGE_KEY, text)
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::Other, "localStorage set failed"))

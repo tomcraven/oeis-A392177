@@ -28,10 +28,7 @@ pub fn index_to_xy_ring_offset(ring: u32, offset: u32) -> (i32, i32) {
     if offset < 3 * side_len {
         return (-ring_i, ring_i - 1 - (offset - 2 * side_len) as i32);
     }
-    (
-        -ring_i + 1 + (offset - 3 * side_len) as i32,
-        -ring_i,
-    )
+    (-ring_i + 1 + (offset - 3 * side_len) as i32, -ring_i)
 }
 
 /// Grid coordinates → spiral index.
@@ -170,7 +167,10 @@ mod tests {
             assert_eq!(ring_offset_to_index(ro), index, "index {index}");
             let (x, y) = index_to_xy(index);
             assert_eq!(xy_to_ring_offset(x, y), ro, "index {index} ({x},{y})");
-            assert_eq!(xy_to_index(x, y), ring_offset_to_index(xy_to_ring_offset(x, y)));
+            assert_eq!(
+                xy_to_index(x, y),
+                ring_offset_to_index(xy_to_ring_offset(x, y))
+            );
         }
     }
 

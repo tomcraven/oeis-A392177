@@ -124,10 +124,7 @@ pub fn builtin_scenarios() -> Vec<PerfScenario> {
             left_inset_px: 320.0,
             script: vec![
                 PerfCameraStep::Hold { frames: 30 },
-                PerfCameraStep::PanWorld {
-                    dx: 800.0,
-                    dy: 0.0,
-                },
+                PerfCameraStep::PanWorld { dx: 800.0, dy: 0.0 },
                 PerfCameraStep::Hold { frames: 60 },
             ],
         },
@@ -161,7 +158,10 @@ pub fn builtin_scenarios() -> Vec<PerfScenario> {
                 PerfCameraStep::Hold { frames: 15 },
                 PerfCameraStep::PanWorld { dx: 400.0, dy: 0.0 },
                 PerfCameraStep::Hold { frames: 15 },
-                PerfCameraStep::PanWorld { dx: -800.0, dy: 200.0 },
+                PerfCameraStep::PanWorld {
+                    dx: -800.0,
+                    dy: 200.0,
+                },
                 PerfCameraStep::Hold { frames: 30 },
             ],
         },
@@ -286,7 +286,9 @@ pub fn setup_perf_harness(
         return;
     };
     let Some(scenario) = load_scenario_by_name(&name) else {
-        panic!("unknown --perf-scenario {name:?} (built-in: origin_settled, pan_east, zoom_out_catchup, pan_render_stress, or path to .toml)");
+        panic!(
+            "unknown --perf-scenario {name:?} (built-in: origin_settled, pan_east, zoom_out_catchup, pan_render_stress, or path to .toml)"
+        );
     };
     let Some(game) = game_definition_for_preset(&scenario.preset) else {
         panic!("unknown preset {:?} in perf scenario", scenario.preset);

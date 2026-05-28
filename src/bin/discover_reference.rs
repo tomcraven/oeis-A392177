@@ -2,7 +2,8 @@ use std::env;
 use std::path::PathBuf;
 
 use red_black_knights::discover::{
-    self, DEFAULT_CELL_PIXEL_SCALE, DEFAULT_TARGET_INDEX, write_multiscale_boards, write_run_outputs,
+    self, DEFAULT_CELL_PIXEL_SCALE, DEFAULT_TARGET_INDEX, write_multiscale_boards,
+    write_run_outputs,
 };
 use red_black_knights::model::GameDefinition;
 
@@ -43,10 +44,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--preset" => {
                 i += 1;
-                preset = args
-                    .get(i)
-                    .ok_or("--preset requires a value")?
-                    .clone();
+                preset = args.get(i).ok_or("--preset requires a value")?.clone();
             }
             "--help" | "-h" => {
                 print_help();
@@ -63,13 +61,7 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
         std::fs::remove_dir_all(&out_dir)?;
     }
     write_run_outputs(&out_dir, &config, &def, &sim, &meta, cell_scale)?;
-    write_multiscale_boards(
-        &out_dir,
-        &def,
-        &sim,
-        meta.bounds.into(),
-        cell_scale,
-    )?;
+    write_multiscale_boards(&out_dir, &def, &sim, meta.bounds.into(), cell_scale)?;
 
     println!(
         "reference\t{}\tpreset\t{preset}\ttarget_index\t{target_index}\tgrid\t{}x{}\tsettled\t{}",

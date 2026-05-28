@@ -207,7 +207,8 @@ fn show_copy_modal(
         .dyn_into::<web_sys::HtmlElement>()
         .map_err(|_| "close was not an element")?;
     close.set_text_content(Some("Close"));
-    close.set_attribute("type", "button")
+    close
+        .set_attribute("type", "button")
         .map_err(|_| "button type")?;
     let close_style = close.style();
     let _ = close_style.set_property("align-self", "flex-end");
@@ -218,18 +219,11 @@ fn show_copy_modal(
     let _ = close_style.set_property("background", "#222");
     let _ = close_style.set_property("color", "#eee");
 
-    panel
-        .append_child(&hint)
-        .map_err(|_| "append hint")?;
+    panel.append_child(&hint).map_err(|_| "append hint")?;
     panel.append_child(&field).map_err(|_| "append field")?;
-    panel
-        .append_child(&close)
-        .map_err(|_| "append close")?;
-    overlay
-        .append_child(&panel)
-        .map_err(|_| "append panel")?;
-    body.append_child(&overlay)
-        .map_err(|_| "append modal")?;
+    panel.append_child(&close).map_err(|_| "append close")?;
+    overlay.append_child(&panel).map_err(|_| "append panel")?;
+    body.append_child(&overlay).map_err(|_| "append modal")?;
 
     let len = text.chars().count() as u32;
     let _ = field.set_selection_range(0, len);
@@ -405,18 +399,10 @@ fn show_paste_modal(
     style_dialog_button(&close.style(), false)?;
 
     panel.append_child(&field).map_err(|_| "append field")?;
-    actions
-        .append_child(&close)
-        .map_err(|_| "append cancel")?;
-    actions
-        .append_child(&use_btn)
-        .map_err(|_| "append use")?;
-    panel
-        .append_child(&actions)
-        .map_err(|_| "append actions")?;
-    overlay
-        .append_child(&panel)
-        .map_err(|_| "append panel")?;
+    actions.append_child(&close).map_err(|_| "append cancel")?;
+    actions.append_child(&use_btn).map_err(|_| "append use")?;
+    panel.append_child(&actions).map_err(|_| "append actions")?;
+    overlay.append_child(&panel).map_err(|_| "append panel")?;
     body.append_child(&overlay)
         .map_err(|_| "append paste modal")?;
 
@@ -428,10 +414,7 @@ fn show_paste_modal(
     Ok(())
 }
 
-fn style_dialog_button(
-    style: &web_sys::CssStyleDeclaration,
-    primary: bool,
-) -> Result<(), String> {
+fn style_dialog_button(style: &web_sys::CssStyleDeclaration, primary: bool) -> Result<(), String> {
     let set = |prop: &str, value: &str| {
         style
             .set_property(prop, value)

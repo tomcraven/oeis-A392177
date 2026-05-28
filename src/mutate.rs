@@ -31,12 +31,7 @@ pub fn toggle_square(moves: &mut Vec<(i32, i32)>, x: i32, y: i32) {
 
 /// Shift attack cells on a fixed `(2r+1)²` grid; each row/column wraps like a ring buffer.
 /// Pass `dx` or `dy` as `±1` (the other `0`). Preserves attack count and grid radius.
-pub fn shift_attacks(
-    moves: &mut Vec<(i32, i32)>,
-    dx: i32,
-    dy: i32,
-    fixed_radius: Option<i32>,
-) {
+pub fn shift_attacks(moves: &mut Vec<(i32, i32)>, dx: i32, dy: i32, fixed_radius: Option<i32>) {
     if moves.is_empty() || (dx == 0 && dy == 0) {
         return;
     }

@@ -35,7 +35,9 @@ fn main() {
     });
 
     for order in VisitOrder::ALL {
-        let m = bench_median(warmup, iters, max_index, |max| bench_index_to_xy(order, max));
+        let m = bench_median(warmup, iters, max_index, |max| {
+            bench_index_to_xy(order, max)
+        });
         print_row("index_to_xy", order, max_index, warmup, iters, m, baseline);
     }
 
@@ -43,7 +45,9 @@ fn main() {
         bench_xy_to_index_spiral_direct(max)
     });
     for order in VisitOrder::ALL {
-        let m = bench_median(warmup, iters, max_index, |max| bench_xy_to_index(order, max));
+        let m = bench_median(warmup, iters, max_index, |max| {
+            bench_xy_to_index(order, max)
+        });
         print_row(
             "xy_to_index",
             order,
@@ -75,7 +79,9 @@ fn main() {
         bench_mixed_place_spiral_direct(max)
     });
     for order in VisitOrder::ALL {
-        let m = bench_median(warmup, iters, max_index, |max| bench_mixed_place(order, max));
+        let m = bench_median(warmup, iters, max_index, |max| {
+            bench_mixed_place(order, max)
+        });
         print_row(
             "mixed_scan_place",
             order,
@@ -163,9 +169,7 @@ fn bench_index_to_xy_spiral_direct(max_index: u32) -> Duration {
 }
 
 fn bench_xy_to_index(order: VisitOrder, max_index: u32) -> Duration {
-    let coords: Vec<(i32, i32)> = (0..max_index)
-        .map(|i| order.index_to_xy(i))
-        .collect();
+    let coords: Vec<(i32, i32)> = (0..max_index).map(|i| order.index_to_xy(i)).collect();
     let start = Instant::now();
     let mut acc = 0u32;
     for &(x, y) in &coords {
@@ -176,9 +180,7 @@ fn bench_xy_to_index(order: VisitOrder, max_index: u32) -> Duration {
 }
 
 fn bench_xy_to_index_spiral_direct(max_index: u32) -> Duration {
-    let coords: Vec<(i32, i32)> = (0..max_index)
-        .map(spiral::index_to_xy)
-        .collect();
+    let coords: Vec<(i32, i32)> = (0..max_index).map(spiral::index_to_xy).collect();
     let start = Instant::now();
     let mut acc = 0u32;
     for &(x, y) in &coords {
@@ -193,7 +195,8 @@ fn bench_scan_step(order: VisitOrder, max_index: u32) -> Duration {
     let start = Instant::now();
     let mut xy = (0, 0);
     for i in 0..max_index {
-        xy = order.scan_step_xy(i, xy);
+        xy = order.scan_step_xy(i, black_box(xy));
+        black_box(i);
     }
     black_box(xy);
     start.elapsed()
@@ -227,11 +230,12 @@ fn bench_mixed_place(order: VisitOrder, max_index: u32) -> Duration {
     let mut xy = (0, 0);
     let mut acc = 0u32;
     for i in 0..max_index {
-        xy = order.scan_step_xy(i, xy);
+        xy = order.scan_step_xy(i, black_box(xy));
         let (x, y) = xy;
         for &(dx, dy) in &KNIGHT_OFFSETS {
             acc = acc.wrapping_add(order.xy_to_index(x + dx, y + dy));
         }
+        black_box(i);
     }
     black_box((xy, acc));
     start.elapsed()

@@ -1,5 +1,5 @@
-use bevy::prelude::{Resource, *};
 use bevy::camera::Projection;
+use bevy::prelude::{Resource, *};
 use serde::{Deserialize, Serialize};
 
 use crate::bookmark_config::BookmarkStore;
@@ -9,7 +9,6 @@ use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::{SavedColor, SavedGameDefinition};
 use crate::model::GameDefinition;
 use crate::random_gen::{RandomGenConfig, RandomPiecesConfig};
-use crate::index_order::VisitOrder;
 use crate::ui::{BoardColourMode, SidebarSections, UiState};
 use crate::viewport::ViewportState;
 
@@ -34,8 +33,6 @@ pub struct SavedUiState {
     pub sidebar: SidebarSections,
     #[serde(default)]
     pub board_colour_mode: BoardColourMode,
-    #[serde(default)]
-    pub visit_order: VisitOrder,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -75,7 +72,6 @@ pub fn capture_session(
             roster_remove_piece: ui_state.roster_remove_piece,
             add_piece_color: SavedColor::from_bevy(ui_state.add_piece_color),
             board_colour_mode: ui_state.board_colour_mode,
-            visit_order: ui_state.visit_order,
             bookmark_selected,
             sidebar: ui_state.sidebar.clone(),
         },
@@ -96,8 +92,6 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.roster_remove_piece = saved.roster_remove_piece.min(n.saturating_sub(1));
     ui_state.add_piece_color = saved.add_piece_color.to_bevy();
     ui_state.board_colour_mode = saved.board_colour_mode;
-    ui_state.visit_order = saved.visit_order;
-    ui_state.visit_order_applied = saved.visit_order;
     ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
@@ -160,9 +154,8 @@ fn read_local_storage() -> Option<String> {
 
 #[cfg(target_family = "wasm")]
 fn write_local_storage(text: &str) -> std::io::Result<()> {
-    let window = web_sys::window().ok_or_else(|| {
-        std::io::Error::new(std::io::ErrorKind::NotFound, "no window")
-    })?;
+    let window = web_sys::window()
+        .ok_or_else(|| std::io::Error::new(std::io::ErrorKind::NotFound, "no window"))?;
     let storage = window
         .local_storage()
         .map_err(|_| std::io::Error::new(std::io::ErrorKind::NotFound, "no localStorage"))?
@@ -197,10 +190,18 @@ pub fn apply_saved_app_session(
     viewport.render_dirty = true;
 
     apply_camera_to_query(&session.camera, &mut query);
+    ui_state
+        .sim_config_history
+        .reset_to(crate::sim_config_history::SimConfigSnapshot {
+            game: restored,
+            camera: session.camera,
+        });
     cache.last = Some(session);
 }
 
-fn apply_legacy_camera_only(query: &mut Query<(&mut Transform, &mut Projection), With<BoardCamera>>) {
+fn apply_legacy_camera_only(
+    query: &mut Query<(&mut Transform, &mut Projection), With<BoardCamera>>,
+) {
     let Some(saved) = crate::camera_config::load() else {
         return;
     };
@@ -270,6 +271,7 @@ mod tests {
         let def = GameDefinition::knight_3_clique();
         let mut ui = UiState::default();
         ui.sidebar.view = true;
+        ui.sidebar.random_generation = true;
         ui.sidebar.pieces = true;
         ui.sidebar.pieces_summary = true;
         ui.sync_attack_squares = true;
@@ -288,6 +290,7 @@ mod tests {
         let loaded: AppSession = toml::from_str(&text).unwrap();
         assert_eq!(loaded, session);
         assert!(loaded.ui.sidebar.view);
+        assert!(loaded.ui.sidebar.random_generation);
         assert!(loaded.ui.sidebar.pieces);
         assert!(loaded.ui.sidebar.pieces_summary);
         assert!(loaded.ui.sync_attack_squares);

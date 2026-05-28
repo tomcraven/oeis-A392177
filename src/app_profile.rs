@@ -85,7 +85,11 @@ mod enabled {
     #[derive(Resource, Default)]
     pub struct AppProfileFrame;
 
-    pub fn scope<T>(_label: &'static str, _frame: &mut AppProfileFrame, f: impl FnOnce() -> T) -> T {
+    pub fn scope<T>(
+        _label: &'static str,
+        _frame: &mut AppProfileFrame,
+        f: impl FnOnce() -> T,
+    ) -> T {
         f()
     }
 
@@ -96,7 +100,7 @@ mod enabled {
     pub fn print_report(_totals: &AppProfileTotals) {}
 }
 
-pub use enabled::{flush_frame, note_display_clone_ns, print_report, scope, AppProfileFrame};
+pub use enabled::{AppProfileFrame, flush_frame, note_display_clone_ns, print_report, scope};
 
 pub fn labels() -> &'static [&'static str] {
     &LABELS

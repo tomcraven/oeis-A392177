@@ -3,8 +3,8 @@ use std::time::Duration;
 
 use crate::CELL_SIZE;
 use crate::camera::BoardCamera;
-use crate::model::GameDefinition;
 use crate::index_order::VisitOrder;
+use crate::model::GameDefinition;
 use crate::sim_worker::SimulationBridge;
 
 /// Default window size (side panel + rectangular board region).
@@ -169,7 +169,6 @@ pub fn sync_board_camera_viewport(
 pub fn sync_simulation_to_viewport(
     mut sim: ResMut<SimulationBridge>,
     def: Res<GameDefinition>,
-    ui_state: Res<crate::ui::UiState>,
     mut viewport: ResMut<ViewportState>,
     camera_q: Query<(&Transform, &Projection), With<BoardCamera>>,
     window_q: Query<&Window>,
@@ -179,11 +178,12 @@ pub fn sync_simulation_to_viewport(
 ) {
     #[cfg(feature = "app_profile")]
     if let Some(frame) = profile_frame.as_mut() {
+        let visit_order = sim.visit_order();
         crate::app_profile::scope("sync_viewport", frame, || {
             sync_simulation_to_viewport_inner(
                 &mut sim,
                 def.as_ref(),
-                ui_state.visit_order,
+                visit_order,
                 &mut viewport,
                 &camera_q,
                 &window_q,
@@ -191,10 +191,11 @@ pub fn sync_simulation_to_viewport(
         });
         return;
     }
+    let visit_order = sim.visit_order();
     sync_simulation_to_viewport_inner(
         &mut sim,
         def.as_ref(),
-        ui_state.visit_order,
+        visit_order,
         &mut viewport,
         &camera_q,
         &window_q,

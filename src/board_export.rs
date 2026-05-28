@@ -36,7 +36,8 @@ pub struct BoardExportDialogState {
 }
 
 #[cfg(not(target_family = "wasm"))]
-type SaveDialogFuture = std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>>;
+type SaveDialogFuture =
+    std::pin::Pin<Box<dyn std::future::Future<Output = Option<rfd::FileHandle>>>>;
 
 #[cfg(not(target_family = "wasm"))]
 impl BoardExportDialogState {
@@ -88,7 +89,10 @@ pub fn run_board_export(
     def: Res<GameDefinition>,
     sim: Res<SimulationBridge>,
     #[cfg(not(target_family = "wasm"))] mut dialog: NonSendMut<BoardExportDialogState>,
-    #[cfg(not(target_family = "wasm"))] window_handles: Query<&RawHandleWrapperHolder, With<PrimaryWindow>>,
+    #[cfg(not(target_family = "wasm"))] window_handles: Query<
+        &RawHandleWrapperHolder,
+        With<PrimaryWindow>,
+    >,
     #[cfg(target_family = "wasm")] mut wasm_job: ResMut<BoardExportWasmJob>,
 ) {
     if let Some(job) = pending.0.take() {
@@ -117,7 +121,12 @@ pub fn run_board_export(
 
     #[cfg(not(target_family = "wasm"))]
     {
-        poll_save_dialog(&mut dialog, &mut ui_state, def.as_ref(), &sim.display.occupancy);
+        poll_save_dialog(
+            &mut dialog,
+            &mut ui_state,
+            def.as_ref(),
+            &sim.display.occupancy,
+        );
         poll_write_task(&mut dialog, &mut ui_state);
     }
 
@@ -179,15 +188,9 @@ fn poll_save_dialog(
             let def = def.clone();
             let occupancy = occupancy.clone();
             dialog.write_task = Some(AsyncComputeTaskPool::get().spawn(async move {
-                discover::write_board_png(
-                    &def,
-                    &occupancy,
-                    bounds,
-                    DEFAULT_CELL_PIXEL_SCALE,
-                    &path,
-                )
-                .map(|_| format!("Saved {}", path.display()))
-                .map_err(|e| e.to_string())
+                discover::write_board_png(&def, &occupancy, bounds, DEFAULT_CELL_PIXEL_SCALE, &path)
+                    .map(|_| format!("Saved {}", path.display()))
+                    .map_err(|e| e.to_string())
             }));
         }
         None => ui_state.export_status = Some("Export cancelled".into()),

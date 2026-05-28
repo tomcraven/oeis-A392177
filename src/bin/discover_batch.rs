@@ -33,24 +33,15 @@ fn run() -> Result<(), Box<dyn std::error::Error>> {
             }
             "--start" => {
                 i += 1;
-                start_iteration = args
-                    .get(i)
-                    .ok_or("--start requires a value")?
-                    .parse()?;
+                start_iteration = args.get(i).ok_or("--start requires a value")?.parse()?;
             }
             "--count" => {
                 i += 1;
-                count = args
-                    .get(i)
-                    .ok_or("--count requires a value")?
-                    .parse()?;
+                count = args.get(i).ok_or("--count requires a value")?.parse()?;
             }
             "--turns" => {
                 i += 1;
-                turns = args
-                    .get(i)
-                    .ok_or("--turns requires a value")?
-                    .parse()?;
+                turns = args.get(i).ok_or("--turns requires a value")?.parse()?;
             }
             "--cell-scale" => {
                 i += 1;
@@ -142,13 +133,7 @@ fn emit_run(
         return Err("fixed-turn mode not supported for catalog batch".into());
     }
     write_run_outputs(run_dir, &config, &def, &sim, &meta, cell_pixel_scale)?;
-    write_multiscale_boards(
-        run_dir,
-        &def,
-        &sim,
-        meta.bounds.into(),
-        cell_pixel_scale,
-    )?;
+    write_multiscale_boards(run_dir, &def, &sim, meta.bounds.into(), cell_pixel_scale)?;
     Ok(())
 }
 
@@ -177,7 +162,11 @@ fn read_field_usize(run_dir: &Path, key: &str) -> Result<usize, Box<dyn std::err
         .unwrap_or(0))
 }
 
-fn read_field_u32(run_dir: &Path, table: &str, index: usize) -> Result<u32, Box<dyn std::error::Error>> {
+fn read_field_u32(
+    run_dir: &Path,
+    table: &str,
+    index: usize,
+) -> Result<u32, Box<dyn std::error::Error>> {
     let text = fs::read_to_string(run_dir.join("meta.toml"))?;
     let mut in_table = false;
     let mut values = Vec::new();

@@ -2,28 +2,28 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use serde::{Deserialize, Serialize};
 
-use crate::board_export;
-use crate::bookmark_config::{Bookmark, BookmarkStore};
-use crate::share_code::{self, ShareCapture};
-use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
-use crate::camera_config::CameraSessionConfig;
-use crate::calibration_config;
 #[cfg(not(target_family = "wasm"))]
 use crate::CELL_SIZE;
-use crate::index_order::VisitOrder;
-use crate::model::{Piece, GameDefinition, PieceDef};
+use crate::board_export;
+use crate::bookmark_config::{Bookmark, BookmarkStore};
+use crate::calibration_config;
+use crate::camera::{BoardCamera, PanCamera, PendingCameraAction};
+use crate::camera_config::CameraSessionConfig;
+use crate::model::{GameDefinition, Piece, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
     shared_attack_extent_for_pieces, shift_attacks, toggle_random_attack_square,
     toggle_random_blocked_by,
 };
 use crate::random_gen::{
-    AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig,
-    generate_random_game, generate_random_pieces_game,
+    AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig, generate_random_game,
+    generate_random_pieces_game,
 };
 use crate::render::RenderCache;
 #[cfg(not(target_family = "wasm"))]
 use crate::render::grid_texture_size;
+use crate::share_code::{self, ShareCapture};
+use crate::sim_config_history::{SimConfigHistory, SimConfigSnapshot};
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
 
@@ -49,19 +49,15 @@ impl<'de> Deserialize<'de> for BoardColourMode {
 pub struct SidebarSections {
     #[serde(default)]
     pub view: bool,
-    #[serde(default)]
-    pub colouring: bool,
     /// Presets, custom bookmarks, and share controls.
     #[serde(default, alias = "bookmarks", alias = "share", alias = "presets")]
     pub library: bool,
-    #[serde(default, alias = "random_generator")]
-    pub random_attacks: bool,
-    #[serde(default)]
-    pub random_pieces: bool,
-    #[serde(default)]
-    pub mutate: bool,
     #[serde(default)]
     pub pieces: bool,
+    #[serde(default, alias = "random_generator")]
+    pub random_generation: bool,
+    #[serde(default)]
+    pub mutate: bool,
     #[serde(default)]
     pub pieces_summary: bool,
     #[serde(default)]
@@ -70,18 +66,18 @@ pub struct SidebarSections {
     pub pieces_advanced: bool,
     #[serde(default)]
     pub debug: bool,
-    /// Cell visit order for simulation growth (Evolution section).
     #[serde(default)]
-    pub evolution: bool,
+    pub library_bookmarks: bool,
+    #[serde(default)]
+    pub library_share: bool,
+    #[serde(default)]
+    pub library_history: bool,
 }
 
 #[derive(Resource)]
 pub struct UiState {
     pub draft: Option<GameDefinition>,
     pub board_colour_mode: BoardColourMode,
-    pub visit_order: VisitOrder,
-    /// Last visit order applied to the simulation worker (ephemeral).
-    pub visit_order_applied: VisitOrder,
     pub random_gen: RandomGenConfig,
     pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
@@ -111,6 +107,9 @@ pub struct UiState {
     pub share_code_import_dialog_open: bool,
     /// egui time (`Context::input`) when copy succeeded; drives brief “Copied!” button label.
     pub share_code_copied_at: Option<f64>,
+    pub sim_config_history: SimConfigHistory,
+    /// When true, the next applied sim config change must not append to [`Self::sim_config_history`].
+    pub suppress_sim_history: bool,
 }
 
 impl Default for UiState {
@@ -118,8 +117,6 @@ impl Default for UiState {
         Self {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
-            visit_order: VisitOrder::default(),
-            visit_order_applied: VisitOrder::default(),
             random_gen: RandomGenConfig::default(),
             random_pieces_config: RandomPiecesConfig::default(),
             mutate_piece: 0,
@@ -137,6 +134,8 @@ impl Default for UiState {
             share_code_import_pending: false,
             share_code_import_dialog_open: false,
             share_code_copied_at: None,
+            sim_config_history: SimConfigHistory::default(),
+            suppress_sim_history: false,
         }
     }
 }
@@ -250,15 +249,7 @@ fn share_code_import_egui_dialog(
         ui_state.share_code_import_dialog_open = false;
         let code = ui_state.share_code_input.clone();
         import_share_code_from_text(
-            &code,
-            def,
-            sim,
-            ui_state,
-            viewport,
-            cache,
-            camera_q,
-            draft,
-            bookmarks,
+            &code, def, sim, ui_state, viewport, cache, camera_q, draft, bookmarks,
         );
     }
 }
@@ -378,12 +369,11 @@ pub fn ui_game_definition(
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
     mut board_export_pending: ResMut<board_export::BoardExportPending>,
-    #[cfg(not(target_family = "wasm"))]
-    board_export_dialog: NonSend<board_export::BoardExportDialogState>,
-    #[cfg(target_family = "wasm")]
-    board_export_wasm: Res<board_export::BoardExportWasmJob>,
-    #[cfg(target_family = "wasm")]
-    share_code_paste: Res<crate::wasm_clipboard::WasmShareCodePaste>,
+    #[cfg(not(target_family = "wasm"))] board_export_dialog: NonSend<
+        board_export::BoardExportDialogState,
+    >,
+    #[cfg(target_family = "wasm")] board_export_wasm: Res<board_export::BoardExportWasmJob>,
+    #[cfg(target_family = "wasm")] share_code_paste: Res<crate::wasm_clipboard::WasmShareCodePaste>,
     mut camera_q: Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
     window_q: Query<&Window>,
 ) {
@@ -395,6 +385,18 @@ pub fn ui_game_definition(
         .draft
         .take()
         .unwrap_or_else(|| def.as_ref().clone());
+    if ui_state.sim_config_history.is_empty() {
+        let camera =
+            read_camera_session(&camera_q, &window_q, &viewport).unwrap_or(CameraSessionConfig {
+                x: 0.0,
+                y: 0.0,
+                zoom: calibration_config::MIN_ZOOM_OUT,
+            });
+        ui_state.sim_config_history.reset_to(SimConfigSnapshot {
+            game: def.as_ref().clone(),
+            camera,
+        });
+    }
     let panel_response = egui::SidePanel::left("game_config")
         .default_width(SIDEBAR_PANEL_WIDTH)
         .show(ctx, |ui| {
@@ -404,132 +406,104 @@ pub fn ui_game_definition(
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
                     ui.heading("Red & Black Knights");
-                    ui_state.sidebar.view = sidebar_collapsing(ui, "view", "View", ui_state.sidebar.view, false, |ui| {
-                        if ui.button("Center view").clicked() {
-                            camera_actions.center_view = true;
-                        }
+                    ui_state.sidebar.view = sidebar_collapsing(
+                        ui,
+                        "view",
+                        "View",
+                        ui_state.sidebar.view,
+                        false,
+                        |ui| {
+                            if ui.button("Center view").clicked() {
+                                camera_actions.center_view = true;
+                            }
 
-                        ui.add_space(4.0);
-                        if ui.button("Export PNG").clicked() {
-                            ui_state.export_status = if let Some(bounds) = viewport.bounds {
-                                let queued = {
-                                    #[cfg(not(target_family = "wasm"))]
-                                    {
-                                        board_export::queue_board_png_export(
-                                            &mut board_export_pending,
-                                            bounds,
-                                            &board_export_dialog,
-                                        )
-                                    }
-                                    #[cfg(target_family = "wasm")]
-                                    {
-                                        board_export::queue_board_png_export(
-                                            &mut board_export_pending,
-                                            bounds,
-                                            &board_export_wasm,
-                                        )
-                                    }
-                                };
-                                match queued {
-                                    Ok(()) => Some(
-                                        if cfg!(target_family = "wasm") {
+                            ui.add_space(4.0);
+                            if ui.button("Export PNG").clicked() {
+                                ui_state.export_status = if let Some(bounds) = viewport.bounds {
+                                    let queued = {
+                                        #[cfg(not(target_family = "wasm"))]
+                                        {
+                                            board_export::queue_board_png_export(
+                                                &mut board_export_pending,
+                                                bounds,
+                                                &board_export_dialog,
+                                            )
+                                        }
+                                        #[cfg(target_family = "wasm")]
+                                        {
+                                            board_export::queue_board_png_export(
+                                                &mut board_export_pending,
+                                                bounds,
+                                                &board_export_wasm,
+                                            )
+                                        }
+                                    };
+                                    match queued {
+                                        Ok(()) => Some(if cfg!(target_family = "wasm") {
                                             "Exporting…".into()
                                         } else {
                                             "Choose save location…".into()
-                                        },
-                                    ),
-                                    Err(err) => Some(err),
-                                }
-                            } else {
-                                Some("Board not ready yet".into())
-                            };
-                        }
-                        if let Some(status) = &ui_state.export_status {
-                            ui.label(status);
-                        }
+                                        }),
+                                        Err(err) => Some(err),
+                                    }
+                                } else {
+                                    Some("Board not ready yet".into())
+                                };
+                            }
+                            if let Some(status) = &ui_state.export_status {
+                                ui.label(status);
+                            }
 
-                        ui.add_space(4.0);
-                        ui.separator();
-                        ui.add_space(4.0);
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
 
-                        if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
-                        {
-                            if let Projection::Orthographic(ref mut ortho) = *projection {
-                                sidebar_field_label(ui, "Position");
-                                ui.columns(2, |cols| {
-                                    let row_h = cols[0].spacing().interact_size.y;
-                                    let w0 = cols[0].available_width();
-                                    let w1 = cols[1].available_width();
-                                    cols[0].add_sized(
-                                        egui::vec2(w0, row_h),
-                                        egui::DragValue::new(&mut transform.translation.x)
-                                            .speed(4.0),
-                                    );
-                                    cols[1].add_sized(
-                                        egui::vec2(w1, row_h),
-                                        egui::DragValue::new(&mut transform.translation.y)
-                                            .speed(4.0),
-                                    );
-                                });
-                                ui.add_space(4.0);
+                            if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
+                            {
+                                if let Projection::Orthographic(ref mut ortho) = *projection {
+                                    sidebar_field_label(ui, "Position");
+                                    ui.columns(2, |cols| {
+                                        let row_h = cols[0].spacing().interact_size.y;
+                                        let w0 = cols[0].available_width();
+                                        let w1 = cols[1].available_width();
+                                        cols[0].add_sized(
+                                            egui::vec2(w0, row_h),
+                                            egui::DragValue::new(&mut transform.translation.x)
+                                                .speed(4.0),
+                                        );
+                                        cols[1].add_sized(
+                                            egui::vec2(w1, row_h),
+                                            egui::DragValue::new(&mut transform.translation.y)
+                                                .speed(4.0),
+                                        );
+                                    });
+                                    ui.add_space(4.0);
 
-                                let effective_zoom_max =
-                                    if let Ok(window) = window_q.single() {
+                                    let effective_zoom_max = if let Ok(window) = window_q.single() {
                                         let safe = viewport::max_safe_zoom_out_scale(
                                             ortho,
                                             window,
                                             viewport.left_inset_px,
                                         );
-                                        calibration_config::effective_zoom_out_max(safe, pan.max_scale)
+                                        calibration_config::effective_zoom_out_max(
+                                            safe,
+                                            pan.max_scale,
+                                        )
                                     } else {
-                                        calibration_config::MAX_ZOOM_OUT_BUDGET
-                                            .min(pan.max_scale)
+                                        calibration_config::MAX_ZOOM_OUT_BUDGET.min(pan.max_scale)
                                     };
-                                ortho.scale = ortho
-                                    .scale
-                                    .clamp(pan.min_scale, effective_zoom_max);
+                                    ortho.scale =
+                                        ortho.scale.clamp(pan.min_scale, effective_zoom_max);
 
-                                sidebar_field_label(ui, "Zoom");
-                                ui.add(
-                                    egui::DragValue::new(&mut ortho.scale)
-                                        .range(pan.min_scale..=effective_zoom_max)
-                                        .speed(0.02)
-                                        .fixed_decimals(3),
-                                );
-                                ui.add_space(SIDEBAR_FIELD_GAP);
-                            }
-                        }
-                    });
-                    ui_state.sidebar.evolution = sidebar_collapsing(
-                        ui,
-                        "evolution",
-                        "Evolution",
-                        ui_state.sidebar.evolution,
-                        false,
-                        |ui| {
-                            sidebar_field_label(ui, "Visit order");
-                            let prev = ui_state.visit_order;
-                            egui::ComboBox::from_id_salt("visit_order")
-                                .selected_text(ui_state.visit_order.label())
-                                .show_ui(ui, |ui| {
-                                    for order in VisitOrder::ALL {
-                                        ui.selectable_value(
-                                            &mut ui_state.visit_order,
-                                            order,
-                                            order.label(),
-                                        );
-                                    }
-                                });
-                            ui.horizontal(|ui| {
-                                if ui.button("◀ Previous").clicked() {
-                                    ui_state.visit_order = ui_state.visit_order.prev();
+                                    sidebar_field_label(ui, "Zoom");
+                                    ui.add(
+                                        egui::DragValue::new(&mut ortho.scale)
+                                            .range(pan.min_scale..=effective_zoom_max)
+                                            .speed(0.02)
+                                            .fixed_decimals(3),
+                                    );
+                                    ui.add_space(SIDEBAR_FIELD_GAP);
                                 }
-                                if ui.button("Next ▶").clicked() {
-                                    ui_state.visit_order = ui_state.visit_order.next();
-                                }
-                            });
-                            if ui_state.visit_order != prev {
-                                viewport.render_dirty = true;
                             }
                         },
                     );
@@ -540,402 +514,39 @@ pub fn ui_game_definition(
                         ui_state.sidebar.library,
                         false,
                         |ui| {
-                            let catalog = GameDefinition::preset_catalog();
-                            let custom_n = bookmarks.bookmarks.len();
-                            if let Some(sel) = bookmarks.selected {
-                                if sel >= custom_n {
-                                    bookmarks.selected = None;
-                                }
-                            }
-                            let total = library_entry_count(custom_n);
-                            let selected_idx =
-                                library_selected_index(&bookmarks, ui_state.preset_index);
-                            let selected_label =
-                                library_selected_label(&bookmarks, ui_state.preset_index);
-
-                            if total > 0 {
-                                egui::ComboBox::from_id_salt("library_pick")
-                                    .selected_text(selected_label)
-                                    .show_ui(ui, |ui| {
-                                        let mut pick: Option<usize> = None;
-                                        for (i, (label, _)) in catalog.iter().enumerate() {
-                                            let is_sel = bookmarks.selected.is_none()
-                                                && ui_state.preset_index == i;
-                                            if ui.selectable_label(is_sel, *label).clicked() {
-                                                pick = Some(i);
-                                            }
-                                        }
-                                        for (j, bm) in bookmarks.bookmarks.iter().enumerate() {
-                                            if ui
-                                                .selectable_label(
-                                                    bookmarks.selected == Some(j),
-                                                    &bm.name,
-                                                )
-                                                .clicked()
-                                            {
-                                                pick = Some(catalog.len() + j);
-                                            }
-                                        }
-                                        if let Some(i) = pick {
-                                            apply_library_index(
-                                                i,
-                                                &mut draft,
-                                                &mut ui_state,
-                                                &mut bookmarks,
-                                                &mut viewport,
-                                                &mut camera_q,
-                                            );
-                                        }
-                                    });
-                                ui.horizontal(|ui| {
-                                    if ui.button("◀ Previous").clicked() {
-                                        apply_library_index(
-                                            selected_idx + total - 1,
-                                            &mut draft,
-                                            &mut ui_state,
-                                            &mut bookmarks,
-                                            &mut viewport,
-                                            &mut camera_q,
-                                        );
-                                    }
-                                    if ui.button("Next ▶").clicked() {
-                                        apply_library_index(
-                                            selected_idx + 1,
-                                            &mut draft,
-                                            &mut ui_state,
-                                            &mut bookmarks,
-                                            &mut viewport,
-                                            &mut camera_q,
-                                        );
-                                    }
-                                });
-                                ui.add_space(4.0);
-                            }
-
-                            ui.text_edit_singleline(&mut ui_state.bookmark_new_name);
-                            ui.horizontal(|ui| {
-                                let custom_selected = bookmarks.selected;
-                                let can_delete =
-                                    custom_selected.is_some() && custom_n > 0;
-                                if ui
-                                    .add_enabled(can_delete, egui::Button::new("Delete bookmark"))
-                                    .clicked()
-                                {
-                                    bookmarks.remove_selected();
-                                }
-                                if ui.button("Add bookmark").clicked() {
-                                    let name = if ui_state.bookmark_new_name.trim().is_empty() {
-                                        format!("Bookmark {}", custom_n + 1)
-                                    } else {
-                                        ui_state.bookmark_new_name.trim().to_string()
-                                    };
-                                    ui_state.bookmark_new_name.clear();
-                                    if let Some(camera) =
-                                        read_camera_session(&camera_q, &window_q, &viewport)
-                                    {
-                                        let bm = Bookmark::capture(
-                                            name,
-                                            &draft,
-                                            camera,
-                                            viewport.target_index,
-                                        );
-                                        bookmarks.add(bm);
-                                    }
-                                }
-                            });
-
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-
-                            const SHARE_COPIED_FLASH_SECS: f64 = 1.0;
-                            let now = ctx.input(|i| i.time);
-                            if ui_state
-                                .share_code_copied_at
-                                .is_some_and(|t| now - t >= SHARE_COPIED_FLASH_SECS)
-                            {
-                                ui_state.share_code_copied_at = None;
-                            }
-                            let copy_share_label = if ui_state.share_code_copied_at.is_some() {
-                                "Copied!"
-                            } else {
-                                "Copy share code"
-                            };
-                            if ui.button(copy_share_label).clicked() {
-                                match read_camera_session(&camera_q, &window_q, &viewport) {
-                                    Some(camera) => {
-                                        let snap = share_code::capture_share_view(ShareCapture {
-                                            def: &draft,
-                                            camera,
-                                            target_index: viewport.target_index,
-                                            board_colour_mode: ui_state.board_colour_mode,
-                                        });
-                                        match share_code::encode_share_code(&snap) {
-                                            Ok(code) => {
-                                                #[cfg(target_family = "wasm")]
-                                                {
-                                                    use crate::wasm_clipboard::{
-                                                        ShareCodeCopyOutcome,
-                                                        publish_share_code_for_copy,
-                                                    };
-                                                    match publish_share_code_for_copy(&code) {
-                                                        Ok(
-                                                            ShareCodeCopyOutcome::SystemClipboard,
-                                                        ) => {
-                                                            ui_state.share_code_copied_at =
-                                                                Some(ctx.input(|i| i.time));
-                                                        }
-                                                        Ok(
-                                                            ShareCodeCopyOutcome::ManualCopyDialog,
-                                                        ) => {}
-                                                        Err(_) => {}
-                                                    }
-                                                }
-                                                #[cfg(not(target_family = "wasm"))]
-                                                {
-                                                    ctx.copy_text(code);
-                                                    ui_state.share_code_copied_at =
-                                                        Some(ctx.input(|i| i.time));
-                                                }
-                                            }
-                                            Err(_) => {}
-                                        }
-                                    }
-                                    None => {}
-                                }
-                            }
-                            if ui.button("Import share code").clicked() {
-                                ui_state.share_code_input.clear();
+                            library_sidebar_body(
+                                ui,
+                                ctx,
+                                &mut draft,
+                                &mut ui_state,
+                                &mut bookmarks,
+                                &mut viewport,
+                                &mut camera_q,
+                                &window_q,
+                                &sim,
                                 #[cfg(target_family = "wasm")]
-                                share_code_paste.open_paste_dialog("");
-                                #[cfg(not(target_family = "wasm"))]
-                                {
-                                    ui_state.share_code_import_dialog_open = true;
-                                }
-                            }
+                                &share_code_paste,
+                            );
                         },
                     );
-                    ui_state.sidebar.colouring = sidebar_collapsing(
+                    ui_state.sidebar.pieces = sidebar_collapsing(
                         ui,
-                        "colouring",
-                        "Colouring",
-                        ui_state.sidebar.colouring,
+                        "pieces",
+                        "Pieces",
+                        ui_state.sidebar.pieces,
+                        false,
+                        |ui| pieces_sidebar_body(ui, &mut draft, &mut ui_state),
+                    );
+                    ui_state.sidebar.random_generation = sidebar_collapsing(
+                        ui,
+                        "random_generation",
+                        "Random generation",
+                        ui_state.sidebar.random_generation,
                         false,
                         |ui| {
-                            let prev = ui_state.board_colour_mode;
-                            ui.radio_value(
-                                &mut ui_state.board_colour_mode,
-                                BoardColourMode::Piece,
-                                "Piece colour",
-                            );
-                            if ui_state.board_colour_mode != prev {
-                                viewport.render_dirty = true;
-                                cache.rendered_bounds = None;
-                            }
+                            random_generation_ui(ui, &mut ui_state, &mut draft);
                         },
                     );
-                    ui_state.sidebar.random_attacks = sidebar_collapsing(
-                        ui,
-                        "random_attacks",
-                        "Random attacks",
-                        ui_state.sidebar.random_attacks,
-                        false,
-                        |ui| {
-                        let rg = &mut ui_state.random_gen;
-                        ui.scope(|ui| {
-                            sidebar_u32_range(
-                                ui,
-                                "Piece count",
-                                &mut rg.piece_count_min,
-                                &mut rg.piece_count_max,
-                                1..=32,
-                                None,
-                            );
-                            sidebar_i32_range(
-                                ui,
-                                "Attack radius",
-                                &mut rg.attack_radius_min,
-                                &mut rg.attack_radius_max,
-                                1..=12,
-                                Some(
-                                    "Chebyshev distance from each piece when sampling attack cells",
-                                ),
-                            );
-
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-
-                            sidebar_f32_slider(
-                                ui,
-                                "Pattern density",
-                                &mut rg.pattern_density,
-                                0.0..=1.0,
-                                false,
-                                None,
-                            );
-                            sidebar_field_label(ui, "Attack symmetry");
-                            egui::ComboBox::from_id_salt("random_attack_symmetry")
-                                .selected_text(rg.attack_symmetry.label())
-                                .show_ui(ui, |ui| {
-                                    for mode in AttackSymmetry::ALL {
-                                        if ui
-                                            .selectable_label(
-                                                rg.attack_symmetry == mode,
-                                                mode.label(),
-                                            )
-                                            .clicked()
-                                        {
-                                            rg.attack_symmetry = mode;
-                                        }
-                                    }
-                                });
-                            ui.checkbox(
-                                &mut rg.identical_pieces,
-                                "Identical attack patterns",
-                            );
-                            ui.add_space(SIDEBAR_FIELD_GAP);
-
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(6.0);
-                            if ui.button("Generate random attacks").clicked() {
-                                rg.sanitize();
-                                let mut rng = rand::rng();
-                                draft = generate_random_game(rg, &mut rng);
-                            }
-                        });
-                    });
-
-                    ui_state.sidebar.random_pieces = sidebar_collapsing(
-                        ui,
-                        "random_pieces",
-                        "Random pieces",
-                        ui_state.sidebar.random_pieces,
-                        false,
-                        |ui| {
-                        let catalog = PieceDef::piece_catalog();
-                        {
-                        let rpc = &mut ui_state.random_pieces_config;
-
-                        let slot_count = rpc.slots.len();
-                        let mut remove_at: Option<usize> = None;
-                        for slot_i in 0..slot_count {
-                            let mut locked = rpc.slots[slot_i].locked;
-                            let mut random_attack = rpc.slots[slot_i].random_attack;
-                            let mut catalog_index = rpc.slots[slot_i]
-                                .catalog_index
-                                .min(catalog.len().saturating_sub(1));
-                            let mut color_rgb = {
-                                let c = rpc.slots[slot_i].color.to_bevy().to_srgba();
-                                [c.red, c.green, c.blue]
-                            };
-                            let selected_label = if locked {
-                                catalog
-                                    .get(catalog_index)
-                                    .map(|(name, _)| *name)
-                                    .unwrap_or("?")
-                            } else if random_attack {
-                                "random attack"
-                            } else {
-                                "random preset"
-                            };
-                            ui.horizontal(|ui| {
-                                if slot_count > 1 {
-                                    let remove = ui
-                                        .add_sized(
-                                            egui::vec2(22.0, 22.0),
-                                            egui::Button::new("X"),
-                                        )
-                                        .on_hover_text("Remove slot")
-                                        .clicked();
-                                    if remove {
-                                        remove_at = Some(slot_i);
-                                    }
-                                }
-                                egui::ComboBox::from_id_salt(format!(
-                                    "random_piece_slot_{slot_i}"
-                                ))
-                                .selected_text(selected_label)
-                                .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_label(
-                                            !locked && !random_attack,
-                                            "random preset",
-                                        )
-                                        .clicked()
-                                    {
-                                        locked = false;
-                                        random_attack = false;
-                                    }
-                                    if ui
-                                        .selectable_label(
-                                            !locked && random_attack,
-                                            "random attack",
-                                        )
-                                        .clicked()
-                                    {
-                                        locked = false;
-                                        random_attack = true;
-                                    }
-                                    for (ci, (name, _)) in catalog.iter().enumerate() {
-                                        let picked =
-                                            locked && catalog_index == ci;
-                                        if ui.selectable_label(picked, *name).clicked() {
-                                            locked = true;
-                                            random_attack = false;
-                                            catalog_index = ci;
-                                        }
-                                    }
-                                });
-                                if ui.color_edit_button_rgb(&mut color_rgb).changed() {
-                                    rpc.slots[slot_i].color =
-                                        crate::game_snapshot::SavedColor::from_bevy(Color::srgb(
-                                            color_rgb[0],
-                                            color_rgb[1],
-                                            color_rgb[2],
-                                        ));
-                                }
-                            });
-                            rpc.slots[slot_i].locked = locked;
-                            rpc.slots[slot_i].random_attack = random_attack;
-                            rpc.slots[slot_i].catalog_index = catalog_index;
-                        }
-                        if let Some(i) = remove_at {
-                            rpc.slots.remove(i);
-                        }
-
-                        if rpc.slots.len() < 32 {
-                            if ui
-                                .add_sized(
-                                    egui::vec2(22.0, 22.0),
-                                    egui::Button::new("+"),
-                                )
-                                .on_hover_text("Add slot")
-                                .clicked()
-                            {
-                                let i = rpc.slots.len();
-                                rpc.slots.push(RandomPieceSlot::with_default_color(i));
-                            }
-                        }
-                        }
-
-                        ui.add_space(4.0);
-                        ui.separator();
-                        ui.add_space(6.0);
-                        if ui.button("Generate random pieces").clicked() {
-                            ui_state.random_pieces_config.sanitize();
-                            let pieces_cfg = ui_state.random_pieces_config.clone();
-                            let mut attack_cfg = ui_state.random_gen.clone();
-                            attack_cfg.sanitize();
-                            let mut rng = rand::rng();
-                            draft = generate_random_pieces_game(
-                                &pieces_cfg,
-                                &attack_cfg,
-                                &mut rng,
-                            );
-                        }
-                    });
 
                     ui_state.sidebar.mutate = sidebar_collapsing(
                         ui,
@@ -944,64 +555,62 @@ pub fn ui_game_definition(
                         ui_state.sidebar.mutate,
                         false,
                         |ui| {
-                        if draft.pieces.is_empty() {
-                            ui.label("No pieces");
-                        } else {
-                            if !ui_state.mutate_all
-                                && ui_state.mutate_piece >= draft.pieces.len()
-                            {
-                                ui_state.mutate_piece = draft.pieces.len().saturating_sub(1);
-                            }
-                            let selected = if ui_state.mutate_all {
-                                "All".to_string()
+                            if draft.pieces.is_empty() {
+                                ui.label("No pieces");
                             } else {
-                                let a = ui_state.mutate_piece;
-                                format!("{}: {}", a, draft.pieces[a].name)
-                            };
-                            egui::ComboBox::from_id_salt("mutate_piece_pick")
-                                .selected_text(selected)
-                                .show_ui(ui, |ui| {
-                                    if ui
-                                        .selectable_label(ui_state.mutate_all, "All")
-                                        .clicked()
-                                    {
-                                        ui_state.mutate_all = true;
-                                    }
-                                    for (aid, piece) in draft.pieces.iter().enumerate() {
-                                        let picked = !ui_state.mutate_all
-                                            && ui_state.mutate_piece == aid;
-                                        if ui
-                                            .selectable_label(
-                                                picked,
-                                                format!("{aid}: {}", piece.name),
-                                            )
-                                            .clicked()
+                                if !ui_state.mutate_all
+                                    && ui_state.mutate_piece >= draft.pieces.len()
+                                {
+                                    ui_state.mutate_piece = draft.pieces.len().saturating_sub(1);
+                                }
+                                let selected = if ui_state.mutate_all {
+                                    "All".to_string()
+                                } else {
+                                    let a = ui_state.mutate_piece;
+                                    format!("{}: {}", a, draft.pieces[a].name)
+                                };
+                                egui::ComboBox::from_id_salt("mutate_piece_pick")
+                                    .selected_text(selected)
+                                    .show_ui(ui, |ui| {
+                                        if ui.selectable_label(ui_state.mutate_all, "All").clicked()
                                         {
-                                            ui_state.mutate_all = false;
-                                            ui_state.mutate_piece = aid;
+                                            ui_state.mutate_all = true;
                                         }
-                                    }
-                                });
+                                        for (aid, piece) in draft.pieces.iter().enumerate() {
+                                            let picked = !ui_state.mutate_all
+                                                && ui_state.mutate_piece == aid;
+                                            if ui
+                                                .selectable_label(
+                                                    picked,
+                                                    format!("{aid}: {}", piece.name),
+                                                )
+                                                .clicked()
+                                            {
+                                                ui_state.mutate_all = false;
+                                                ui_state.mutate_piece = aid;
+                                            }
+                                        }
+                                    });
 
-                            let targets: Vec<usize> = if ui_state.mutate_all {
-                                (0..draft.pieces.len()).collect()
-                            } else {
-                                vec![ui_state.mutate_piece]
-                            };
+                                let targets: Vec<usize> = if ui_state.mutate_all {
+                                    (0..draft.pieces.len()).collect()
+                                } else {
+                                    vec![ui_state.mutate_piece]
+                                };
 
-                            let mut rng = rand::rng();
-                            let piece_count = draft.pieces.len();
-                            let shared_r = if ui_state.mutate_all && targets.len() > 1 {
-                                Some(shared_attack_extent_for_pieces(&draft.pieces, &targets))
-                            } else {
-                                None
-                            };
+                                let mut rng = rand::rng();
+                                let piece_count = draft.pieces.len();
+                                let shared_r = if ui_state.mutate_all && targets.len() > 1 {
+                                    Some(shared_attack_extent_for_pieces(&draft.pieces, &targets))
+                                } else {
+                                    None
+                                };
 
-                            ui.add_space(4.0);
-                            ui.scope(|ui| {
-                                ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
+                                ui.add_space(4.0);
+                                ui.scope(|ui| {
+                                    ui.spacing_mut().item_spacing = egui::vec2(6.0, 5.0);
 
-                                if mutate_panel_button(ui, "Toggle attack square") {
+                                    if mutate_panel_button(ui, "Toggle attack square") {
                                         for &aid in &targets {
                                             toggle_random_attack_square(
                                                 &mut draft.pieces[aid].piece.valid_moves,
@@ -1010,8 +619,7 @@ pub fn ui_game_definition(
                                         }
                                     }
 
-                                    let (shift_px, shift_mx) =
-                                        mutate_panel_pair(ui, "+X", "−X");
+                                    let (shift_px, shift_mx) = mutate_panel_pair(ui, "+X", "−X");
                                     if shift_px {
                                         for &aid in &targets {
                                             shift_attacks(
@@ -1032,8 +640,7 @@ pub fn ui_game_definition(
                                             );
                                         }
                                     }
-                                    let (shift_py, shift_my) =
-                                        mutate_panel_pair(ui, "+Y", "−Y");
+                                    let (shift_py, shift_my) = mutate_panel_pair(ui, "+Y", "−Y");
                                     if shift_py {
                                         for &aid in &targets {
                                             shift_attacks(
@@ -1072,20 +679,15 @@ pub fn ui_game_definition(
                                         }
                                     }
 
-                                    let (rot_ccw, rot_cw) =
-                                        mutate_panel_pair(ui, "↺ CCW", "↻ CW");
+                                    let (rot_ccw, rot_cw) = mutate_panel_pair(ui, "↺ CCW", "↻ CW");
                                     if rot_ccw {
                                         for &aid in &targets {
-                                            rotate_ccw(
-                                                &mut draft.pieces[aid].piece.valid_moves,
-                                            );
+                                            rotate_ccw(&mut draft.pieces[aid].piece.valid_moves);
                                         }
                                     }
                                     if rot_cw {
                                         for &aid in &targets {
-                                            rotate_cw(
-                                                &mut draft.pieces[aid].piece.valid_moves,
-                                            );
+                                            rotate_cw(&mut draft.pieces[aid].piece.valid_moves);
                                         }
                                     }
 
@@ -1100,190 +702,9 @@ pub fn ui_game_definition(
                                         }
                                     }
                                 });
-                        }
-                    });
-
-                    ui_state.sidebar.pieces = sidebar_collapsing(
-                        ui,
-                        "pieces",
-                        "Pieces",
-                        ui_state.sidebar.pieces,
-                        false,
-                        |ui| {
-                        let mut open_advanced = false;
-                        ui_state.sidebar.pieces_summary = sidebar_collapsing(
-                            ui,
-                            "pieces_summary",
-                            "Summary",
-                            ui_state.sidebar.pieces_summary,
-                            false,
-                            |ui| {
-                                if draft.pieces.is_empty() {
-                                    ui.label("No pieces in set");
-                                } else {
-                                    let advanced_was_open = ui_state.sidebar.pieces_advanced;
-                                    let row_h = summary_strip_row_height(&draft);
-                                    egui::ScrollArea::horizontal()
-                                        .min_scrolled_height(0.0)
-                                        .max_height(row_h)
-                                        .show(ui, |ui| {
-                                            ui.horizontal_top(|ui| {
-                                                ui.spacing_mut().item_spacing =
-                                                    egui::vec2(2.0, 0.0);
-                                                for (piece_idx, piece) in
-                                                    draft.pieces.iter().enumerate()
-                                                {
-                                                    let blocked: Vec<_> = piece
-                                                        .blocked_by
-                                                        .iter()
-                                                        .filter_map(|&id| {
-                                                            draft
-                                                                .pieces
-                                                                .get(id)
-                                                                .map(|a| a.name.as_str())
-                                                        })
-                                                        .collect();
-                                                    let blocked_line = if blocked.is_empty() {
-                                                        "blocked by: —".to_string()
-                                                    } else {
-                                                        format!(
-                                                            "blocked by: {}",
-                                                            blocked.join(", ")
-                                                        )
-                                                    };
-                                                    let hover = format!(
-                                                        "{piece_idx}: {}\n{blocked_line}\nClick to edit",
-                                                        piece.name
-                                                    );
-                                                    let selected = piece_idx
-                                                        == ui_state.edit_piece
-                                                        && (advanced_was_open
-                                                            || open_advanced);
-
-                                                    let preview = move_grid_preview_ui(
-                                                        ui,
-                                                        piece_idx,
-                                                        &piece.piece.valid_moves,
-                                                        piece.color,
-                                                        selected,
-                                                    )
-                                                    .on_hover_text(hover);
-
-                                                    if preview.clicked() {
-                                                        ui_state.edit_piece = piece_idx;
-                                                        open_advanced = true;
-                                                    }
-                                                }
-                                            });
-                                        });
-                                }
-                            },
-                        );
-
-                        pieces_roster_editor_ui(ui, &mut draft, &mut ui_state);
-
-                        if !draft.pieces.is_empty() {
-                            ui_state.sidebar.pieces_advanced = sidebar_collapsing(
-                                ui,
-                                "pieces_advanced",
-                                "Advanced",
-                                ui_state.sidebar.pieces_advanced,
-                                open_advanced,
-                                |ui| {
-                                if ui_state.edit_piece >= draft.pieces.len() {
-                                    ui_state.edit_piece =
-                                        draft.pieces.len().saturating_sub(1);
-                                }
-                                let piece_idx = ui_state.edit_piece;
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Name");
-                                    ui.text_edit_singleline(&mut draft.pieces[piece_idx].name);
-                                });
-
-                                ui.horizontal(|ui| {
-                                    ui.checkbox(
-                                        &mut draft.pieces[piece_idx].enabled,
-                                        "Enabled",
-                                    )
-                                    .on_hover_text(
-                                        "Disabled pieces stay in the set but do not take placement turns",
-                                    );
-                                    if ui.button("Duplicate").clicked() {
-                                        duplicate_draft_piece(
-                                            &mut draft,
-                                            &mut ui_state,
-                                            piece_idx,
-                                        );
-                                    }
-                                });
-
-                                let rgb = draft.pieces[piece_idx].color.to_srgba();
-                                let mut arr = [rgb.red, rgb.green, rgb.blue];
-                                if ui.color_edit_button_rgb(&mut arr).changed() {
-                                    draft.pieces[piece_idx].color =
-                                        Color::srgb(arr[0], arr[1], arr[2]);
-                                }
-
-                                ui.horizontal(|ui| {
-                                    ui.label("Attacked squares");
-                                    ui.checkbox(
-                                        &mut ui_state.sync_attack_squares,
-                                        "Sync all pieces",
-                                    )
-                                    .on_hover_text(
-                                        "When enabled, each square toggle applies to every piece",
-                                    );
-                                });
-                                move_grid_ui(
-                                    ui,
-                                    piece_idx,
-                                    &mut draft.pieces,
-                                    ui_state.sync_attack_squares,
-                                );
-                                if ui.button("Clear").clicked() {
-                                    clear_attack_squares(
-                                        &mut draft.pieces,
-                                        piece_idx,
-                                        ui_state.sync_attack_squares,
-                                    );
-                                }
-
-                                ui.label("Blocked by");
-                                for other in 0..draft.pieces.len() {
-                                    if other == piece_idx {
-                                        continue;
-                                    }
-                                    let mut blocked =
-                                        draft.pieces[piece_idx].blocked_by.contains(&other);
-                                    let label = draft.pieces[other].name.clone();
-                                    if ui.checkbox(&mut blocked, label).changed() {
-                                        if blocked {
-                                            if !draft.pieces[piece_idx]
-                                                .blocked_by
-                                                .contains(&other)
-                                            {
-                                                draft.pieces[piece_idx].blocked_by.push(other);
-                                            }
-                                        } else {
-                                            draft.pieces[piece_idx]
-                                                .blocked_by
-                                                .retain(|&id| id != other);
-                                        }
-                                    }
-                                }
-
-                                if ui.button("Remove piece").clicked() {
-                                    remove_draft_piece(
-                                        &mut draft,
-                                        &mut ui_state,
-                                        piece_idx,
-                                    );
-                                }
-                            },
-                            );
-                        }
-                    });
+                            }
+                        },
+                    );
 
                     if draft.turn_order.is_empty() && !draft.pieces.is_empty() {
                         draft.turn_order = (0..draft.pieces.len()).collect();
@@ -1317,13 +738,11 @@ pub fn ui_game_definition(
                                 if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
                                     (camera_q.single(), window_q.single())
                                 {
-                                    let board_width_px = (window.width() - viewport.left_inset_px)
-                                        .ceil()
-                                        .max(1.0);
+                                    let board_width_px =
+                                        (window.width() - viewport.left_inset_px).ceil().max(1.0);
                                     let world_per_screen_px =
                                         ortho.area.width() / board_width_px.max(1.0);
-                                    let cells_per_screen_px =
-                                        world_per_screen_px / CELL_SIZE;
+                                    let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
                                     let board_pixels = board_width_px as u64
                                         * window.height().ceil().max(1.0) as u64;
                                     ui.label(format!("Zoom scale: {:.3}", ortho.scale));
@@ -1372,16 +791,25 @@ pub fn ui_game_definition(
 
     if !draft.same_sim_state(def.as_ref()) {
         dedupe_moves(&mut draft);
+        if !ui_state.suppress_sim_history {
+            let camera =
+                read_camera_session(&camera_q, &window_q, &viewport).unwrap_or_else(|| {
+                    ui_state
+                        .sim_config_history
+                        .current()
+                        .map(|s| s.camera)
+                        .unwrap_or(CameraSessionConfig {
+                            x: 0.0,
+                            y: 0.0,
+                            zoom: calibration_config::MIN_ZOOM_OUT,
+                        })
+                });
+            ui_state.sim_config_history.commit(draft.clone(), camera);
+        }
+        ui_state.suppress_sim_history = false;
         *def = draft.clone();
-        sim.request_reset(def.clone(), ui_state.visit_order);
-        ui_state.visit_order_applied = ui_state.visit_order;
-        cache.rendered_bounds = None;
-        viewport.bounds = None;
-        viewport.target_index = 0;
-        viewport.render_dirty = true;
-    } else if ui_state.visit_order != ui_state.visit_order_applied {
-        sim.request_reset(def.clone(), ui_state.visit_order);
-        ui_state.visit_order_applied = ui_state.visit_order;
+        let visit_order = sim.visit_order();
+        sim.request_reset(def.clone(), visit_order);
         cache.rendered_bounds = None;
         viewport.bounds = None;
         viewport.target_index = 0;
@@ -1389,9 +817,551 @@ pub fn ui_game_definition(
     } else if !draft.same_applied_state(def.as_ref()) {
         *def = draft.clone();
         viewport.render_dirty = true;
+    } else {
+        ui_state.suppress_sim_history = false;
     }
 
     ui_state.draft = Some(draft);
+}
+
+fn apply_sim_history_snapshot(
+    snapshot: SimConfigSnapshot,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+    bookmarks: &mut BookmarkStore,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+) {
+    *draft = snapshot.game;
+    apply_bookmark_camera(snapshot.camera, camera_q);
+    ui_state.suppress_sim_history = true;
+    bookmarks.selected = None;
+    ui_state.preset_index = preset_index_for_def(draft).unwrap_or(ui_state.preset_index);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn library_sidebar_body(
+    ui: &mut egui::Ui,
+    ctx: &egui::Context,
+    draft: &mut GameDefinition,
+    ui_state: &mut UiState,
+    bookmarks: &mut BookmarkStore,
+    viewport: &mut ViewportState,
+    camera_q: &mut Query<(&mut Transform, &mut Projection, &PanCamera), With<BoardCamera>>,
+    window_q: &Query<&Window>,
+    sim: &SimulationBridge,
+    #[cfg(target_family = "wasm")] share_code_paste: &crate::wasm_clipboard::WasmShareCodePaste,
+) {
+    ui_state.sidebar.library_bookmarks = sidebar_collapsing(
+        ui,
+        "library_bookmarks",
+        "Bookmarks",
+        ui_state.sidebar.library_bookmarks,
+        false,
+        |ui| {
+            let catalog = GameDefinition::preset_catalog();
+            let custom_n = bookmarks.bookmarks.len();
+            if let Some(sel) = bookmarks.selected {
+                if sel >= custom_n {
+                    bookmarks.selected = None;
+                }
+            }
+            let total = library_entry_count(custom_n);
+            let selected_idx = library_selected_index(&bookmarks, ui_state.preset_index);
+            let selected_label = library_selected_label(&bookmarks, ui_state.preset_index);
+
+            if total > 0 {
+                egui::ComboBox::from_id_salt("library_pick")
+                    .selected_text(selected_label)
+                    .show_ui(ui, |ui| {
+                        let mut pick: Option<usize> = None;
+                        for (i, (label, _)) in catalog.iter().enumerate() {
+                            let is_sel = bookmarks.selected.is_none() && ui_state.preset_index == i;
+                            if ui.selectable_label(is_sel, *label).clicked() {
+                                pick = Some(i);
+                            }
+                        }
+                        for (j, bm) in bookmarks.bookmarks.iter().enumerate() {
+                            if ui
+                                .selectable_label(bookmarks.selected == Some(j), &bm.name)
+                                .clicked()
+                            {
+                                pick = Some(catalog.len() + j);
+                            }
+                        }
+                        if let Some(i) = pick {
+                            apply_library_index(i, draft, ui_state, bookmarks, viewport, camera_q);
+                        }
+                    });
+                ui.horizontal(|ui| {
+                    if ui.button("◀ Previous").clicked() {
+                        apply_library_index(
+                            selected_idx + total - 1,
+                            draft,
+                            ui_state,
+                            bookmarks,
+                            viewport,
+                            camera_q,
+                        );
+                    }
+                    if ui.button("Next ▶").clicked() {
+                        apply_library_index(
+                            selected_idx + 1,
+                            draft,
+                            ui_state,
+                            bookmarks,
+                            viewport,
+                            camera_q,
+                        );
+                    }
+                });
+                ui.add_space(4.0);
+            }
+
+            ui.text_edit_singleline(&mut ui_state.bookmark_new_name);
+            ui.horizontal(|ui| {
+                let custom_selected = bookmarks.selected;
+                let can_delete = custom_selected.is_some() && custom_n > 0;
+                if ui
+                    .add_enabled(can_delete, egui::Button::new("Delete bookmark"))
+                    .clicked()
+                {
+                    bookmarks.remove_selected();
+                }
+                if ui.button("Add bookmark").clicked() {
+                    let name = if ui_state.bookmark_new_name.trim().is_empty() {
+                        format!("Bookmark {}", custom_n + 1)
+                    } else {
+                        ui_state.bookmark_new_name.trim().to_string()
+                    };
+                    ui_state.bookmark_new_name.clear();
+                    if let Some(camera) = read_camera_session(camera_q, window_q, viewport) {
+                        let bm = Bookmark::capture(name, draft, camera, viewport.target_index);
+                        bookmarks.add(bm);
+                    }
+                }
+            });
+        },
+    );
+
+    ui_state.sidebar.library_share = sidebar_collapsing(
+        ui,
+        "library_share",
+        "Share",
+        ui_state.sidebar.library_share,
+        false,
+        |ui| {
+            const SHARE_COPIED_FLASH_SECS: f64 = 1.0;
+            let now = ctx.input(|i| i.time);
+            if ui_state
+                .share_code_copied_at
+                .is_some_and(|t| now - t >= SHARE_COPIED_FLASH_SECS)
+            {
+                ui_state.share_code_copied_at = None;
+            }
+            let copy_share_label = if ui_state.share_code_copied_at.is_some() {
+                "Copied!"
+            } else {
+                "Copy share code"
+            };
+            if ui.button(copy_share_label).clicked() {
+                match read_camera_session(camera_q, window_q, viewport) {
+                    Some(camera) => {
+                        let snap = share_code::capture_share_view(ShareCapture {
+                            def: draft,
+                            camera,
+                            target_index: viewport.target_index,
+                            board_colour_mode: ui_state.board_colour_mode,
+                            visit_order: sim.visit_order(),
+                        });
+                        match share_code::encode_share_code(&snap) {
+                            Ok(code) => {
+                                #[cfg(target_family = "wasm")]
+                                {
+                                    use crate::wasm_clipboard::{
+                                        ShareCodeCopyOutcome, publish_share_code_for_copy,
+                                    };
+                                    match publish_share_code_for_copy(&code) {
+                                        Ok(ShareCodeCopyOutcome::SystemClipboard) => {
+                                            ui_state.share_code_copied_at =
+                                                Some(ctx.input(|i| i.time));
+                                        }
+                                        Ok(ShareCodeCopyOutcome::ManualCopyDialog) => {}
+                                        Err(_) => {}
+                                    }
+                                }
+                                #[cfg(not(target_family = "wasm"))]
+                                {
+                                    ctx.copy_text(code);
+                                    ui_state.share_code_copied_at = Some(ctx.input(|i| i.time));
+                                }
+                            }
+                            Err(_) => {}
+                        }
+                    }
+                    None => {}
+                }
+            }
+            if ui.button("Import share code").clicked() {
+                ui_state.share_code_input.clear();
+                #[cfg(target_family = "wasm")]
+                share_code_paste.open_paste_dialog("");
+                #[cfg(not(target_family = "wasm"))]
+                {
+                    ui_state.share_code_import_dialog_open = true;
+                }
+            }
+        },
+    );
+
+    ui_state.sidebar.library_history = sidebar_collapsing(
+        ui,
+        "library_history",
+        "History",
+        ui_state.sidebar.library_history,
+        false,
+        |ui| {
+            if ui_state.sim_config_history.is_empty() {
+                ui.label("No history yet");
+            } else {
+                ui.label(format!(
+                    "{} / {}",
+                    ui_state.sim_config_history.position() + 1,
+                    ui_state.sim_config_history.len()
+                ));
+                ui.horizontal(|ui| {
+                    if ui
+                        .add_enabled(
+                            ui_state.sim_config_history.can_step_back(),
+                            egui::Button::new("◀ Previous"),
+                        )
+                        .clicked()
+                    {
+                        if let Some(snapshot) = ui_state.sim_config_history.step(-1) {
+                            apply_sim_history_snapshot(
+                                snapshot, draft, ui_state, bookmarks, camera_q,
+                            );
+                        }
+                    }
+                    if ui
+                        .add_enabled(
+                            ui_state.sim_config_history.can_step_forward(),
+                            egui::Button::new("Next ▶"),
+                        )
+                        .clicked()
+                    {
+                        if let Some(snapshot) = ui_state.sim_config_history.step(1) {
+                            apply_sim_history_snapshot(
+                                snapshot, draft, ui_state, bookmarks, camera_q,
+                            );
+                        }
+                    }
+                });
+            }
+        },
+    );
+}
+
+fn pieces_sidebar_body(ui: &mut egui::Ui, draft: &mut GameDefinition, ui_state: &mut UiState) {
+    let mut open_advanced = false;
+    ui_state.sidebar.pieces_summary = sidebar_collapsing(
+        ui,
+        "pieces_summary",
+        "Summary",
+        ui_state.sidebar.pieces_summary,
+        false,
+        |ui| {
+            if draft.pieces.is_empty() {
+                ui.label("No pieces in set");
+            } else {
+                let advanced_was_open = ui_state.sidebar.pieces_advanced;
+                let row_h = summary_strip_row_height(draft);
+                egui::ScrollArea::horizontal()
+                    .min_scrolled_height(0.0)
+                    .max_height(row_h)
+                    .show(ui, |ui| {
+                        ui.horizontal_top(|ui| {
+                            ui.spacing_mut().item_spacing = egui::vec2(2.0, 0.0);
+                            for (piece_idx, piece) in draft.pieces.iter().enumerate() {
+                                let blocked: Vec<_> = piece
+                                    .blocked_by
+                                    .iter()
+                                    .filter_map(|&id| draft.pieces.get(id).map(|a| a.name.as_str()))
+                                    .collect();
+                                let blocked_line = if blocked.is_empty() {
+                                    "blocked by: —".to_string()
+                                } else {
+                                    format!("blocked by: {}", blocked.join(", "))
+                                };
+                                let hover = format!(
+                                    "{piece_idx}: {}\n{blocked_line}\nClick to edit",
+                                    piece.name
+                                );
+                                let selected = piece_idx == ui_state.edit_piece
+                                    && (advanced_was_open || open_advanced);
+
+                                let preview = move_grid_preview_ui(
+                                    ui,
+                                    piece_idx,
+                                    &piece.piece.valid_moves,
+                                    piece.color,
+                                    selected,
+                                )
+                                .on_hover_text(hover);
+
+                                if preview.clicked() {
+                                    ui_state.edit_piece = piece_idx;
+                                    open_advanced = true;
+                                }
+                            }
+                        });
+                    });
+            }
+        },
+    );
+
+    pieces_roster_editor_ui(ui, draft, ui_state);
+
+    if !draft.pieces.is_empty() {
+        ui_state.sidebar.pieces_advanced = sidebar_collapsing(
+            ui,
+            "pieces_advanced",
+            "Advanced",
+            ui_state.sidebar.pieces_advanced,
+            open_advanced,
+            |ui| {
+                if ui_state.edit_piece >= draft.pieces.len() {
+                    ui_state.edit_piece = draft.pieces.len().saturating_sub(1);
+                }
+                let piece_idx = ui_state.edit_piece;
+
+                ui.horizontal(|ui| {
+                    ui.label("Name");
+                    ui.text_edit_singleline(&mut draft.pieces[piece_idx].name);
+                });
+
+                ui.horizontal(|ui| {
+                    ui.checkbox(&mut draft.pieces[piece_idx].enabled, "Enabled")
+                        .on_hover_text(
+                            "Disabled pieces stay in the set but do not take placement turns",
+                        );
+                    if ui.button("Duplicate").clicked() {
+                        duplicate_draft_piece(draft, ui_state, piece_idx);
+                    }
+                });
+
+                let rgb = draft.pieces[piece_idx].color.to_srgba();
+                let mut arr = [rgb.red, rgb.green, rgb.blue];
+                if ui.color_edit_button_rgb(&mut arr).changed() {
+                    draft.pieces[piece_idx].color = Color::srgb(arr[0], arr[1], arr[2]);
+                }
+
+                ui.horizontal(|ui| {
+                    ui.label("Attacked squares");
+                    ui.checkbox(&mut ui_state.sync_attack_squares, "Sync all pieces")
+                        .on_hover_text("When enabled, each square toggle applies to every piece");
+                });
+                move_grid_ui(
+                    ui,
+                    piece_idx,
+                    &mut draft.pieces,
+                    ui_state.sync_attack_squares,
+                );
+                if ui.button("Clear").clicked() {
+                    clear_attack_squares(
+                        &mut draft.pieces,
+                        piece_idx,
+                        ui_state.sync_attack_squares,
+                    );
+                }
+
+                ui.label("Blocked by");
+                for other in 0..draft.pieces.len() {
+                    if other == piece_idx {
+                        continue;
+                    }
+                    let mut blocked = draft.pieces[piece_idx].blocked_by.contains(&other);
+                    let label = draft.pieces[other].name.clone();
+                    if ui.checkbox(&mut blocked, label).changed() {
+                        if blocked {
+                            if !draft.pieces[piece_idx].blocked_by.contains(&other) {
+                                draft.pieces[piece_idx].blocked_by.push(other);
+                            }
+                        } else {
+                            draft.pieces[piece_idx].blocked_by.retain(|&id| id != other);
+                        }
+                    }
+                }
+
+                if ui.button("Remove piece").clicked() {
+                    remove_draft_piece(draft, ui_state, piece_idx);
+                }
+            },
+        );
+    }
+}
+
+fn random_generation_ui(ui: &mut egui::Ui, ui_state: &mut UiState, draft: &mut GameDefinition) {
+    ui.label("Pieces");
+    random_piece_slots_ui(ui, &mut ui_state.random_pieces_config);
+
+    ui.add_space(4.0);
+    if ui.button("Generate from slots").clicked() {
+        ui_state.random_pieces_config.sanitize();
+        let pieces_cfg = ui_state.random_pieces_config.clone();
+        let mut attack_cfg = ui_state.random_gen.clone();
+        attack_cfg.sanitize();
+        let mut rng = rand::rng();
+        *draft = generate_random_pieces_game(&pieces_cfg, &attack_cfg, &mut rng);
+    }
+
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    ui.label("Random attack pattern");
+    random_attack_pattern_controls_ui(ui, &mut ui_state.random_gen);
+
+    ui.add_space(4.0);
+    ui.separator();
+    ui.add_space(4.0);
+
+    ui.label("Fully random");
+    sidebar_u32_range(
+        ui,
+        "Piece count",
+        &mut ui_state.random_gen.piece_count_min,
+        &mut ui_state.random_gen.piece_count_max,
+        1..=32,
+        None,
+    );
+    if ui.button("Generate fully random").clicked() {
+        ui_state.random_gen.sanitize();
+        let mut rng = rand::rng();
+        *draft = generate_random_game(&ui_state.random_gen, &mut rng);
+    }
+}
+
+fn random_piece_slots_ui(ui: &mut egui::Ui, config: &mut RandomPiecesConfig) {
+    let catalog = PieceDef::piece_catalog();
+    let slot_count = config.slots.len();
+    let mut remove_at: Option<usize> = None;
+
+    for slot_i in 0..slot_count {
+        let mut locked = config.slots[slot_i].locked;
+        let mut random_attack = config.slots[slot_i].random_attack;
+        let mut catalog_index = config.slots[slot_i]
+            .catalog_index
+            .min(catalog.len().saturating_sub(1));
+        let mut color_rgb = {
+            let c = config.slots[slot_i].color.to_bevy().to_srgba();
+            [c.red, c.green, c.blue]
+        };
+        let selected_label = if locked {
+            catalog
+                .get(catalog_index)
+                .map(|(name, _)| *name)
+                .unwrap_or("?")
+        } else if random_attack {
+            "random attack"
+        } else {
+            "random preset"
+        };
+
+        ui.horizontal(|ui| {
+            if slot_count > 1 {
+                let remove = ui
+                    .add_sized(egui::vec2(22.0, 22.0), egui::Button::new("X"))
+                    .on_hover_text("Remove slot")
+                    .clicked();
+                if remove {
+                    remove_at = Some(slot_i);
+                }
+            }
+            egui::ComboBox::from_id_salt(format!("random_piece_slot_{slot_i}"))
+                .selected_text(selected_label)
+                .show_ui(ui, |ui| {
+                    if ui
+                        .selectable_label(!locked && !random_attack, "random preset")
+                        .clicked()
+                    {
+                        locked = false;
+                        random_attack = false;
+                    }
+                    if ui
+                        .selectable_label(!locked && random_attack, "random attack")
+                        .clicked()
+                    {
+                        locked = false;
+                        random_attack = true;
+                    }
+                    for (ci, (name, _)) in catalog.iter().enumerate() {
+                        let picked = locked && catalog_index == ci;
+                        if ui.selectable_label(picked, *name).clicked() {
+                            locked = true;
+                            random_attack = false;
+                            catalog_index = ci;
+                        }
+                    }
+                });
+            if ui.color_edit_button_rgb(&mut color_rgb).changed() {
+                config.slots[slot_i].color = crate::game_snapshot::SavedColor::from_bevy(
+                    Color::srgb(color_rgb[0], color_rgb[1], color_rgb[2]),
+                );
+            }
+        });
+
+        config.slots[slot_i].locked = locked;
+        config.slots[slot_i].random_attack = random_attack;
+        config.slots[slot_i].catalog_index = catalog_index;
+    }
+
+    if let Some(i) = remove_at {
+        config.slots.remove(i);
+    }
+
+    if config.slots.len() < 32
+        && ui
+            .add_sized(egui::vec2(22.0, 22.0), egui::Button::new("+"))
+            .on_hover_text("Add slot")
+            .clicked()
+    {
+        let i = config.slots.len();
+        config.slots.push(RandomPieceSlot::with_default_color(i));
+    }
+}
+
+fn random_attack_pattern_controls_ui(ui: &mut egui::Ui, config: &mut RandomGenConfig) {
+    sidebar_i32_range(
+        ui,
+        "Attack radius",
+        &mut config.attack_radius_min,
+        &mut config.attack_radius_max,
+        1..=12,
+        Some("Chebyshev distance from each piece when sampling attack cells"),
+    );
+    sidebar_f32_slider(
+        ui,
+        "Pattern density",
+        &mut config.pattern_density,
+        0.0..=1.0,
+        false,
+        None,
+    );
+    sidebar_field_label(ui, "Attack symmetry");
+    egui::ComboBox::from_id_salt("random_attack_symmetry")
+        .selected_text(config.attack_symmetry.label())
+        .show_ui(ui, |ui| {
+            for mode in AttackSymmetry::ALL {
+                if ui
+                    .selectable_label(config.attack_symmetry == mode, mode.label())
+                    .clicked()
+                {
+                    config.attack_symmetry = mode;
+                }
+            }
+        });
+    ui.checkbox(&mut config.identical_pieces, "Identical attack patterns");
+    ui.add_space(SIDEBAR_FIELD_GAP);
 }
 
 fn dedupe_moves(def: &mut GameDefinition) {
@@ -1406,11 +1376,8 @@ const MUTATE_BTN_HEIGHT: f32 = 24.0;
 
 fn mutate_panel_button(ui: &mut egui::Ui, label: &str) -> bool {
     let w = ui.available_width();
-    ui.add_sized(
-        egui::vec2(w, MUTATE_BTN_HEIGHT),
-        egui::Button::new(label),
-    )
-    .clicked()
+    ui.add_sized(egui::vec2(w, MUTATE_BTN_HEIGHT), egui::Button::new(label))
+        .clicked()
 }
 
 fn mutate_panel_pair(ui: &mut egui::Ui, left: &str, right: &str) -> (bool, bool) {
@@ -1575,11 +1542,7 @@ fn remove_draft_piece(draft: &mut GameDefinition, ui_state: &mut UiState, piece_
         .min(draft.pieces.len().saturating_sub(1));
 }
 
-fn pieces_roster_editor_ui(
-    ui: &mut egui::Ui,
-    draft: &mut GameDefinition,
-    ui_state: &mut UiState,
-) {
+fn pieces_roster_editor_ui(ui: &mut egui::Ui, draft: &mut GameDefinition, ui_state: &mut UiState) {
     ui_state.sidebar.edit_roster = sidebar_collapsing(
         ui,
         "edit_roster",
@@ -1623,8 +1586,7 @@ fn pieces_roster_editor_body(
                     let rgb = ui_state.add_piece_color.to_srgba();
                     let mut arr = [rgb.red, rgb.green, rgb.blue];
                     if ui.color_edit_button_rgb(&mut arr).changed() {
-                        ui_state.add_piece_color =
-                            Color::srgb(arr[0], arr[1], arr[2]);
+                        ui_state.add_piece_color = Color::srgb(arr[0], arr[1], arr[2]);
                     }
                 });
                 move_grid_preview_ui(
@@ -1657,10 +1619,7 @@ fn pieces_roster_editor_body(
                     }
                     let remove_idx = ui_state.roster_remove_piece;
                     egui::ComboBox::from_id_salt("roster_remove_pick")
-                        .selected_text(format!(
-                            "{}: {}",
-                            remove_idx, draft.pieces[remove_idx].name
-                        ))
+                        .selected_text(format!("{}: {}", remove_idx, draft.pieces[remove_idx].name))
                         .show_ui(ui, |ui| {
                             for (aid, piece) in draft.pieces.iter().enumerate() {
                                 if ui
@@ -1775,8 +1734,7 @@ fn move_grid_preview_ui(
                     grid_origin.x + col * (cell_px + gap),
                     grid_origin.y + row * (cell_px + gap),
                 );
-                let cell_rect =
-                    egui::Rect::from_min_size(min, egui::vec2(cell_px, cell_px));
+                let cell_rect = egui::Rect::from_min_size(min, egui::vec2(cell_px, cell_px));
 
                 let attack = moves.iter().any(|&m| m == (x, y));
                 let fill = if x == 0 && y == 0 {
@@ -1787,12 +1745,7 @@ fn move_grid_preview_ui(
                     empty_fill
                 };
                 painter.rect_filled(cell_rect, 1.5, fill);
-                painter.rect_stroke(
-                    cell_rect,
-                    1.5,
-                    cell_outline,
-                    egui::StrokeKind::Inside,
-                );
+                painter.rect_stroke(cell_rect, 1.5, cell_outline, egui::StrokeKind::Inside);
                 if x == 0 && y == 0 {
                     painter.text(
                         cell_rect.center(),
@@ -1860,12 +1813,7 @@ fn clear_attack_squares(pieces: &mut [Piece], piece_idx: usize, sync_all: bool) 
     }
 }
 
-fn move_grid_ui(
-    ui: &mut egui::Ui,
-    piece_idx: usize,
-    pieces: &mut [Piece],
-    sync_all: bool,
-) -> bool {
+fn move_grid_ui(ui: &mut egui::Ui, piece_idx: usize, pieces: &mut [Piece], sync_all: bool) -> bool {
     let radius = move_grid_radius(&pieces[piece_idx].piece.valid_moves, ATTACK_GRID_MIN_RADIUS);
     let viewport = attack_grid_viewport_side_px();
     let mut changed = false;
@@ -1920,14 +1868,7 @@ fn attack_grid_editor_ui(
                         .on_hover_text(format!("({x}, {y})"))
                         .clicked()
                     {
-                        if apply_attack_square(
-                            pieces,
-                            piece_idx,
-                            x,
-                            y,
-                            !selected,
-                            sync_all,
-                        ) {
+                        if apply_attack_square(pieces, piece_idx, x, y, !selected, sync_all) {
                             changed = true;
                         }
                     }

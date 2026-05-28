@@ -188,9 +188,7 @@ pub fn time_occupancy_insert<F: FnOnce()>(f: F) {
     }
     let start = Instant::now();
     f();
-    TIMING.with(|t| {
-        t.borrow_mut().occupancy_insert_ns += start.elapsed().as_nanos() as u64
-    });
+    TIMING.with(|t| t.borrow_mut().occupancy_insert_ns += start.elapsed().as_nanos() as u64);
 }
 
 pub fn time_record_forbidden<F: FnOnce()>(f: F) {
@@ -200,9 +198,7 @@ pub fn time_record_forbidden<F: FnOnce()>(f: F) {
     }
     let start = Instant::now();
     f();
-    TIMING.with(|t| {
-        t.borrow_mut().record_forbidden_ns += start.elapsed().as_nanos() as u64
-    });
+    TIMING.with(|t| t.borrow_mut().record_forbidden_ns += start.elapsed().as_nanos() as u64);
 }
 
 pub fn time_placements_push<F: FnOnce()>(f: F) {
@@ -268,9 +264,7 @@ pub struct OccupancyInsertHarness {
 
 impl OccupancyInsertHarness {
     pub fn new() -> Self {
-        Self {
-            cells: Vec::new(),
-        }
+        Self { cells: Vec::new() }
     }
 
     pub fn insert(&mut self, index: u32, piece_id: usize) {

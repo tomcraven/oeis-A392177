@@ -10,15 +10,15 @@ use rand::prelude::IndexedRandom;
 use rand::rngs::StdRng;
 use serde::{Deserialize, Serialize};
 
+use crate::CELL_SIZE;
 use crate::game_snapshot::DiscoverRunConfig;
-use crate::model::{PieceId, GameDefinition};
+use crate::index_order::VisitOrder;
+use crate::model::{GameDefinition, PieceId};
 use crate::random_gen::{AttackSymmetry, RandomGenConfig, generate_random_game};
 use crate::render::grid_texture_size;
-use crate::index_order::VisitOrder;
 use crate::sim::Simulation;
 use crate::spiral::index_to_xy;
 use crate::viewport::GridBounds;
-use crate::CELL_SIZE;
 
 const EMPTY_RGBA: [u8; 4] = [31, 31, 41, 255];
 const BOUNDS_PADDING: i32 = 2;
@@ -128,7 +128,11 @@ pub fn spec_for_iteration(
 }
 
 fn max_placement_index(placements: &[(u32, PieceId)]) -> u32 {
-    placements.iter().map(|&(index, _)| index).max().unwrap_or(0)
+    placements
+        .iter()
+        .map(|&(index, _)| index)
+        .max()
+        .unwrap_or(0)
 }
 
 fn simulate(
@@ -180,7 +184,12 @@ pub fn run_config(config: &DiscoverRunConfig) -> (GameDefinition, Simulation, Di
 pub fn run_known_game(
     def: &GameDefinition,
     target_index: u32,
-) -> (DiscoverRunConfig, GameDefinition, Simulation, DiscoverRunMeta) {
+) -> (
+    DiscoverRunConfig,
+    GameDefinition,
+    Simulation,
+    DiscoverRunMeta,
+) {
     let config = DiscoverRunConfig::from_game(def, target_index, 0);
     let (sim, meta) = simulate(def, target_index, 0);
     (config, def.clone(), sim, meta)
@@ -189,7 +198,12 @@ pub fn run_known_game(
 pub fn run_catalog_index(
     catalog_index: usize,
     target_index: u32,
-) -> Option<(DiscoverRunConfig, GameDefinition, Simulation, DiscoverRunMeta)> {
+) -> Option<(
+    DiscoverRunConfig,
+    GameDefinition,
+    Simulation,
+    DiscoverRunMeta,
+)> {
     use crate::discover_catalog::{game_at, recipe_meta};
 
     let def = game_at(catalog_index)?;
@@ -213,11 +227,8 @@ pub fn square_bounds(half_extent: i32) -> GridBounds {
 }
 
 /// Named zoom levels for reviewing multi-scale structure (see preset-discovery skill).
-pub const MULTISCALE_HALF_EXTENTS: [(&str, i32); 3] = [
-    ("scale_center", 72),
-    ("scale_mid", 320),
-    ("scale_full", 0),
-];
+pub const MULTISCALE_HALF_EXTENTS: [(&str, i32); 3] =
+    [("scale_center", 72), ("scale_mid", 320), ("scale_full", 0)];
 
 pub fn write_multiscale_boards(
     out_dir: &Path,
@@ -243,7 +254,12 @@ pub fn write_multiscale_boards(
 
 pub fn run_random_iteration(
     spec: &DiscoverRunSpec,
-) -> (DiscoverRunConfig, GameDefinition, Simulation, DiscoverRunMeta) {
+) -> (
+    DiscoverRunConfig,
+    GameDefinition,
+    Simulation,
+    DiscoverRunMeta,
+) {
     let mut rng = StdRng::seed_from_u64(spec.rng_seed);
     let def = generate_random_game(&spec.random_gen, &mut rng);
     let config = DiscoverRunConfig::from_game(&def, spec.target_index, spec.turns);
@@ -276,13 +292,7 @@ pub fn write_run_outputs(
     let cell_pixel_scale =
         fit_output_cell_scale(meta.grid_cells[0], meta.grid_cells[1], cell_pixel_scale);
     let png_path = out_dir.join("board.png");
-    write_board_png(
-        def,
-        &sim.occupancy,
-        bounds,
-        cell_pixel_scale,
-        &png_path,
-    )?;
+    write_board_png(def, &sim.occupancy, bounds, cell_pixel_scale, &png_path)?;
 
     let mut meta = meta.clone();
     meta.cell_pixel_scale = cell_pixel_scale;
@@ -305,9 +315,8 @@ pub fn write_run_outputs(
 /// Re-simulate from `config.toml` and rewrite `board.png` / `meta.toml` (e.g. after changing upscale).
 pub fn rerender_saved_run(run_dir: &Path, cell_pixel_scale: u32) -> std::io::Result<()> {
     let text = fs::read_to_string(run_dir.join("config.toml"))?;
-    let config: DiscoverRunConfig = toml::from_str(&text).map_err(|e| {
-        std::io::Error::new(std::io::ErrorKind::InvalidData, e)
-    })?;
+    let config: DiscoverRunConfig = toml::from_str(&text)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::InvalidData, e))?;
     let (def, sim, meta) = run_config(&config);
     write_run_outputs(run_dir, &config, &def, &sim, &meta, cell_pixel_scale)
 }
@@ -348,11 +357,8 @@ pub fn encode_board_png(
 ) -> std::io::Result<Vec<u8>> {
     let out = raster_board_rgba(def, occupancy, bounds, cell_pixel_scale)?;
     let mut buf = Vec::new();
-    out.write_to(
-        &mut std::io::Cursor::new(&mut buf),
-        image::ImageFormat::Png,
-    )
-    .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
+    out.write_to(&mut std::io::Cursor::new(&mut buf), image::ImageFormat::Png)
+        .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
     Ok(buf)
 }
 
@@ -518,10 +524,7 @@ fn raster_board_rgba(
             let px = (x - bounds.min_x) as u32;
             let index = crate::spiral::xy_to_index(x, y);
             let color = if let Some(piece_id) = occupancy.get(&index) {
-                piece_colors
-                    .get(*piece_id)
-                    .copied()
-                    .unwrap_or(EMPTY_RGBA)
+                piece_colors.get(*piece_id).copied().unwrap_or(EMPTY_RGBA)
             } else {
                 EMPTY_RGBA
             };
@@ -530,10 +533,9 @@ fn raster_board_rgba(
         }
     }
 
-    let img: RgbaImage =
-        ImageBuffer::from_raw(width, height, data).ok_or_else(|| {
-            std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid image buffer")
-        })?;
+    let img: RgbaImage = ImageBuffer::from_raw(width, height, data).ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "invalid image buffer")
+    })?;
 
     let out_w = width.saturating_mul(cell_pixel_scale);
     let out_h = height.saturating_mul(cell_pixel_scale);
@@ -606,7 +608,11 @@ mod tests {
         let (config, def, sim, meta) = run_random_iteration(&spec);
         let dir = std::env::temp_dir().join("rbk_discover_test");
         let _ = fs::remove_dir_all(&dir);
-        let scale = fit_output_cell_scale(meta.grid_cells[0], meta.grid_cells[1], DEFAULT_CELL_PIXEL_SCALE);
+        let scale = fit_output_cell_scale(
+            meta.grid_cells[0],
+            meta.grid_cells[1],
+            DEFAULT_CELL_PIXEL_SCALE,
+        );
         write_run_outputs(&dir, &config, &def, &sim, &meta, scale).unwrap();
         assert!(dir.join("board.png").is_file());
         let out = image::open(dir.join("board.png")).unwrap();

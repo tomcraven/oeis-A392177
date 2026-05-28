@@ -20,6 +20,8 @@ Keep it **only** on `UiState` (ephemeral) when it is transient: status toasts, p
 
 `UiState.draft` is rebuilt from `session.game` in `apply_session_to_ui`; do not duplicate the full game in `SavedUiState`.
 
+Backward compatibility for old `session.toml` UI chrome is **not** required by default. When renaming or replacing session-only UI fields, prefer the new clean shape over serde aliases, migration shims, or legacy tests unless the user explicitly asks to preserve old local sessions.
+
 ## Checklist for a new persisted UI field
 
 1. Add the field to [`UiState`](../../src/ui.rs) with a sensible `Default`.

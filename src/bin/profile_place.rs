@@ -2,11 +2,11 @@ use std::collections::HashSet;
 use std::hint::black_box;
 use std::time::Instant;
 
+use red_black_knights::index_order::VisitOrder;
 use red_black_knights::model::GameDefinition;
 use red_black_knights::place_profile::{
     self, ForbiddenInsertHarness, ForbiddenInsertStats, OccupancyInsertHarness, PlaceWorkStats,
 };
-use red_black_knights::index_order::VisitOrder;
 use red_black_knights::sim::Simulation;
 use red_black_knights::spiral::{index_to_xy, xy_to_index};
 
@@ -34,7 +34,10 @@ fn main() {
     let cases: [(&str, fn() -> GameDefinition); 5] = [
         ("knight_2_pairwise", GameDefinition::knight_2_pairwise),
         ("knight_3_clique", GameDefinition::knight_3_clique),
-        ("leaper_4_mixed_clique", GameDefinition::leaper_4_mixed_clique),
+        (
+            "leaper_4_mixed_clique",
+            GameDefinition::leaper_4_mixed_clique,
+        ),
         ("king_6_clique", GameDefinition::king_6_clique),
         ("chimera_3_clique", GameDefinition::chimera_3_clique),
     ];
@@ -50,7 +53,16 @@ fn main() {
         let place_ms = bench_place_replay(&def, &events);
         let micro = microbench_components(&def, &events, &records, def.pieces.len());
         print_summary_row(name, checksum, step_ms, place_ms, &work);
-        print_fanout_report(name, &def, &work, &forb_stats, &events, &records, &micro, place_ms);
+        print_fanout_report(
+            name,
+            &def,
+            &work,
+            &forb_stats,
+            &events,
+            &records,
+            &micro,
+            place_ms,
+        );
         black_box((checksum, events.len()));
     }
 }
@@ -146,9 +158,7 @@ fn microbench_components(
 ) -> MicrobenchMs {
     MicrobenchMs {
         xy_to_index: median_ms(5, || bench_xy_to_index(def, events) as f64 / 1e6),
-        forbidden_single_set: median_ms(5, || {
-            bench_forbidden_single_set(records) as f64 / 1e6
-        }),
+        forbidden_single_set: median_ms(5, || bench_forbidden_single_set(records) as f64 / 1e6),
         forbidden_multi_set: median_ms(5, || {
             bench_forbidden_multi_set(records, piece_count) as f64 / 1e6
         }),
@@ -181,8 +191,9 @@ fn bench_forbidden_single_set(records: &[(usize, u32)]) -> u64 {
 
 fn bench_forbidden_multi_set(records: &[(usize, u32)], piece_count: usize) -> u64 {
     let start = Instant::now();
-    let mut sets: Vec<ForbiddenInsertHarness> =
-        (0..piece_count).map(|_| ForbiddenInsertHarness::default()).collect();
+    let mut sets: Vec<ForbiddenInsertHarness> = (0..piece_count)
+        .map(|_| ForbiddenInsertHarness::default())
+        .collect();
     for &(target, index) in records {
         sets[target].insert(index);
     }
@@ -253,7 +264,12 @@ fn print_fanout_report(
     micro: &MicrobenchMs,
     place_ms: f64,
 ) {
-    let late = analyze_window(events, records, events.len().saturating_sub(LATE_PLACEMENTS), LATE_PLACEMENTS);
+    let late = analyze_window(
+        events,
+        records,
+        events.len().saturating_sub(LATE_PLACEMENTS),
+        LATE_PLACEMENTS,
+    );
     let early = analyze_window(events, records, 0, 1_000.min(events.len()));
 
     eprintln!("\n=== forbidden fanout: {name} ===");
@@ -300,18 +316,15 @@ fn print_fanout_report(
     eprintln!("  per-placement attacked cells (unique spiral index per placement):");
     eprintln!(
         "    first 1k placements: unique/cell {:.2}, cross-target duplicate inserts/placement {:.2}",
-        early.mean_unique_attacked,
-        early.mean_cross_target_dupes
+        early.mean_unique_attacked, early.mean_cross_target_dupes
     );
     eprintln!(
         "    last 1k placements:  unique/cell {:.2}, cross-target duplicate inserts/placement {:.2}",
-        late.mean_unique_attacked,
-        late.mean_cross_target_dupes
+        late.mean_unique_attacked, late.mean_cross_target_dupes
     );
     eprintln!(
         "    fanout multiplier (inserts ÷ unique attacked): early {:.2}×, late {:.2}× (theoretical max = targets per move batch)",
-        early.mean_fanout_multiplier,
-        late.mean_fanout_multiplier
+        early.mean_fanout_multiplier, late.mean_fanout_multiplier
     );
 
     eprintln!("  isolated replay (median ms, fresh state):");
@@ -333,7 +346,8 @@ fn print_fanout_report(
     );
     eprintln!(
         "    multi vs single set:   +{:.1}% (separate `ForbiddenSet` / cache working set)",
-        100.0 * (micro.forbidden_multi_set - micro.forbidden_single_set) / micro.forbidden_single_set.max(0.001)
+        100.0 * (micro.forbidden_multi_set - micro.forbidden_single_set)
+            / micro.forbidden_single_set.max(0.001)
     );
     eprintln!(
         "    occupancy insert:      {:.3} ({:.1}% of place)",
@@ -366,8 +380,7 @@ fn analyze_window(
     let mut count = 0u64;
 
     for event in &events[placement_start..end] {
-        let sample =
-            analyze_placement_fanout(records, record_offset, event.inserts_per_placement);
+        let sample = analyze_placement_fanout(records, record_offset, event.inserts_per_placement);
         record_offset += event.inserts_per_placement;
 
         sum_unique += sample.unique_attacked_cells as u64;

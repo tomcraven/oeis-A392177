@@ -9,12 +9,13 @@ use bevy_egui::{
 };
 
 use crate::app_session::{self, AppSessionCache};
-use crate::board_export::{BoardExportPending, run_board_export};
 #[cfg(not(target_family = "wasm"))]
 use crate::board_export::BoardExportDialogState;
 #[cfg(target_family = "wasm")]
 use crate::board_export::BoardExportWasmJob;
+use crate::board_export::{BoardExportPending, run_board_export};
 use crate::camera::{self, camera_controls};
+use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::perf_harness::{
     self, perf_harness_advance_script, perf_harness_exit_when_done, setup_perf_harness,
@@ -23,8 +24,8 @@ use crate::render::{RenderCache, draw_spiral_cells, setup_render_assets, sync_pi
 use crate::sim_worker::SimulationBridge;
 use crate::ui::{UiState, ui_game_definition};
 use crate::viewport::{
-    ViewportState, sync_board_camera_viewport, sync_simulation_to_viewport, WINDOW_HEIGHT,
-    WINDOW_WIDTH,
+    ViewportState, WINDOW_HEIGHT, WINDOW_WIDTH, sync_board_camera_viewport,
+    sync_simulation_to_viewport,
 };
 
 pub fn configure_app(app: &mut App) {
@@ -86,10 +87,7 @@ pub fn configure_app(app: &mut App) {
     )
     .add_systems(EguiPrimaryContextPass, ui_game_definition);
     #[cfg(target_family = "wasm")]
-    app.add_systems(
-        Update,
-        crate::wasm_clipboard::poll_wasm_share_code_paste,
-    );
+    app.add_systems(Update, crate::wasm_clipboard::poll_wasm_share_code_paste);
     app.add_systems(
         PostUpdate,
         run_board_export.after(EguiPostUpdateSet::EndPass),
@@ -158,15 +156,8 @@ fn setup_camera(mut commands: Commands) {
     ));
 }
 
-fn setup_sim_worker(
-    mut commands: Commands,
-    def: Res<GameDefinition>,
-    ui_state: Res<UiState>,
-) {
-    commands.insert_resource(SimulationBridge::spawn(
-        def.clone(),
-        ui_state.visit_order,
-    ));
+fn setup_sim_worker(mut commands: Commands, def: Res<GameDefinition>) {
+    commands.insert_resource(SimulationBridge::spawn(def.clone(), VisitOrder::default()));
 }
 
 fn load_bookmarks(mut bookmarks: ResMut<crate::bookmark_config::BookmarkStore>) {

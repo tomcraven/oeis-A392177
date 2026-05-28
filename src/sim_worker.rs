@@ -34,8 +34,8 @@ fn display_from_sim(sim: &Simulation) -> SimDisplay {
 mod threaded {
     use super::*;
     use bevy::platform::time::Instant;
-    use std::sync::{mpsc, Mutex};
     use std::sync::mpsc::{Receiver, Sender, TryRecvError};
+    use std::sync::{Mutex, mpsc};
     use std::thread::{self, JoinHandle};
 
     enum SimCommand {
@@ -64,6 +64,7 @@ mod threaded {
         update_rx: Mutex<Receiver<SimUpdate>>,
         _worker: JoinHandle<()>,
         pub display: SimDisplay,
+        visit_order: VisitOrder,
         advance_in_flight: bool,
         active_job_id: u64,
         next_job_id: u64,
@@ -84,6 +85,7 @@ mod threaded {
                 update_rx: Mutex::new(update_rx),
                 _worker: worker,
                 display: SimDisplay::default(),
+                visit_order,
                 advance_in_flight: false,
                 active_job_id: 0,
                 next_job_id: 0,
@@ -120,18 +122,27 @@ mod threaded {
             if self.display.cursors.is_empty() {
                 return false;
             }
-            self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
-                def.pieces
-                    .get(id)
-                    .is_some_and(|a| a.enabled && cursor <= target_index)
-            })
+            self.display
+                .cursors
+                .iter()
+                .enumerate()
+                .any(|(id, &cursor)| {
+                    def.pieces
+                        .get(id)
+                        .is_some_and(|a| a.enabled && cursor <= target_index)
+                })
         }
 
         pub fn is_busy(&self) -> bool {
             self.advance_in_flight
         }
 
+        pub fn visit_order(&self) -> VisitOrder {
+            self.visit_order
+        }
+
         pub fn request_reset(&mut self, def: GameDefinition, visit_order: VisitOrder) {
+            self.visit_order = visit_order;
             self.next_job_id += 1;
             self.advance_in_flight = false;
             let _ = self.cmd_tx.send(SimCommand::Reset { def, visit_order });
@@ -291,7 +302,9 @@ mod threaded {
                     if job_id > active_job_id {
                         let replace = match &best {
                             None => true,
-                            Some(Interrupt::Advance { job_id: best_id, .. }) => job_id > *best_id,
+                            Some(Interrupt::Advance {
+                                job_id: best_id, ..
+                            }) => job_id > *best_id,
                             _ => true,
                         };
                         if replace {
@@ -374,15 +387,23 @@ impl SimulationBridge {
         if self.display.cursors.is_empty() {
             return false;
         }
-        self.display.cursors.iter().enumerate().any(|(id, &cursor)| {
-            def.pieces
-                .get(id)
-                .is_some_and(|a| a.enabled && cursor <= target_index)
-        })
+        self.display
+            .cursors
+            .iter()
+            .enumerate()
+            .any(|(id, &cursor)| {
+                def.pieces
+                    .get(id)
+                    .is_some_and(|a| a.enabled && cursor <= target_index)
+            })
     }
 
     pub fn is_busy(&self) -> bool {
         self.advance_in_flight
+    }
+
+    pub fn visit_order(&self) -> VisitOrder {
+        self.sim.visit_order
     }
 
     pub fn request_reset(&mut self, def: GameDefinition, visit_order: VisitOrder) {

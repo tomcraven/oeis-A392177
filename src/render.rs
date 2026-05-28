@@ -3,9 +3,9 @@ use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, TextureDimension, TextureFormat};
 
 use crate::CELL_SIZE;
+use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::model::PieceId;
-use crate::index_order::VisitOrder;
 use crate::sim::{EMPTY_ARMY_SLOT, OccupancyGrid};
 use crate::sim_worker::SimulationBridge;
 use crate::ui::BoardColourMode;
@@ -84,6 +84,7 @@ pub fn draw_spiral_cells(
         &mut cache,
         &mut viewport,
         &sim.display.occupancy,
+        sim.visit_order(),
         &ui_state,
         &mut board_q,
         #[cfg(feature = "app_profile")]
@@ -97,9 +98,12 @@ fn draw_spiral_cells_inner(
     cache: &mut RenderCache,
     viewport: &mut ViewportState,
     occupancy: &OccupancyGrid,
+    visit_order: VisitOrder,
     ui_state: &crate::ui::UiState,
     board_q: &mut Query<(&mut Transform, &mut Sprite), With<BoardTexture>>,
-    #[cfg(feature = "app_profile")] mut profile_frame: Option<&mut crate::app_profile::AppProfileFrame>,
+    #[cfg(feature = "app_profile")] mut profile_frame: Option<
+        &mut crate::app_profile::AppProfileFrame,
+    >,
 ) {
     if assets.piece_colors.is_empty() {
         return;
@@ -109,7 +113,6 @@ fn draw_spiral_cells_inner(
     };
     let grid_size = grid_texture_size(bounds);
     let colour_mode = ui_state.board_colour_mode;
-    let visit_order = ui_state.visit_order;
 
     const GPU_TEXTURE_DIMENSION_LIMIT: u32 = 16_000;
     if grid_size.x > GPU_TEXTURE_DIMENSION_LIMIT || grid_size.y > GPU_TEXTURE_DIMENSION_LIMIT {
@@ -163,10 +166,22 @@ fn draw_spiral_cells_inner(
 
     #[cfg(feature = "app_profile")]
     let write_image = || {
-        write_grid_image(images, &assets.image, width, height, &mut cache.scratch_rgba)
+        write_grid_image(
+            images,
+            &assets.image,
+            width,
+            height,
+            &mut cache.scratch_rgba,
+        )
     };
     #[cfg(not(feature = "app_profile"))]
-    write_grid_image(images, &assets.image, width, height, &mut cache.scratch_rgba);
+    write_grid_image(
+        images,
+        &assets.image,
+        width,
+        height,
+        &mut cache.scratch_rgba,
+    );
 
     #[cfg(feature = "app_profile")]
     if let Some(frame) = profile_frame.as_mut() {
@@ -329,15 +344,7 @@ fn raster_piece_rows_parallel(
             scope.spawn(move || {
                 let data = unsafe { std::slice::from_raw_parts_mut(base_ptr as *mut u8, len) };
                 for y in y_start..=y_end {
-                    raster_one_row(
-                        y,
-                        bounds,
-                        width,
-                        cells,
-                        piece_colors_u32,
-                        visit_order,
-                        data,
-                    );
+                    raster_one_row(y, bounds, width, cells, piece_colors_u32, visit_order, data);
                 }
             });
         }
@@ -468,8 +475,8 @@ pub fn raster_checksum(data: &[u8]) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::GameDefinition;
     use crate::index_order::VisitOrder;
+    use crate::model::GameDefinition;
     use crate::sim::Simulation;
     use std::time::Instant;
 
@@ -549,7 +556,10 @@ mod tests {
             assert_eq!(data.len(), (size.x * size.y * 4) as usize);
         }
         let ms = start.elapsed().as_secs_f64() * 1e3 / iters as f64;
-        eprintln!("raster_large_bounds median ~{ms:.2} ms ({iters} iters, {} cells)", bounds.cell_count());
+        eprintln!(
+            "raster_large_bounds median ~{ms:.2} ms ({iters} iters, {} cells)",
+            bounds.cell_count()
+        );
         assert!(
             ms < 500.0,
             "raster perf regression: {ms:.1} ms per frame (budget 500 ms)"

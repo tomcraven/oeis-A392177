@@ -1,6 +1,6 @@
 use bevy::prelude::Color;
 
-use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
+use crate::model::{GameDefinition, Piece, PieceDef, PieceId};
 
 const N_PIECES: usize = 16;
 const N_PAIRWISE: usize = N_PIECES * N_PIECES;
@@ -28,7 +28,11 @@ const SIMPLE_PIECES: [(&str, fn() -> PieceDef); N_PIECES] = [
 ];
 
 const MIXED: [(&str, &str, [&'static str; 3]); N_MIXED] = [
-    ("mixed_wazir_ferz_knight", "wazir + ferz + knight", ["wazir", "ferz", "knight"]),
+    (
+        "mixed_wazir_ferz_knight",
+        "wazir + ferz + knight",
+        ["wazir", "ferz", "knight"],
+    ),
     (
         "mixed_wazir_ferz_dabbaba",
         "wazir + ferz + dabbaba",
@@ -95,11 +99,9 @@ pub fn recipe_meta(index: usize) -> Option<(String, String)> {
         return None;
     }
     let id = match section(index) {
-        Section::Pairwise { a, b } => format!(
-            "pairwise_{}_vs_{}",
-            SIMPLE_PIECES[a].0,
-            SIMPLE_PIECES[b].0
-        ),
+        Section::Pairwise { a, b } => {
+            format!("pairwise_{}_vs_{}", SIMPLE_PIECES[a].0, SIMPLE_PIECES[b].0)
+        }
         Section::SameClique { piece, size } => {
             format!("clique_{size}_{}", SIMPLE_PIECES[piece].0)
         }

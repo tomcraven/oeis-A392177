@@ -1,7 +1,7 @@
 use bevy::prelude::Color;
 use serde::{Deserialize, Serialize};
 
-use crate::model::{Piece, PieceId, GameDefinition, PieceDef};
+use crate::model::{GameDefinition, Piece, PieceDef, PieceId};
 
 #[derive(Clone, Copy, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedColor {
@@ -50,12 +50,7 @@ impl SavedGameDefinition {
                 .map(|a| SavedArmy {
                     name: a.name.clone(),
                     color: SavedColor::from_bevy(a.color),
-                    valid_moves: a
-                        .piece
-                        .valid_moves
-                        .iter()
-                        .map(|&(x, y)| [x, y])
-                        .collect(),
+                    valid_moves: a.piece.valid_moves.iter().map(|&(x, y)| [x, y]).collect(),
                     blocked_by: a.blocked_by.clone(),
                     enabled: a.enabled,
                 })
@@ -91,11 +86,7 @@ impl From<SavedGameDefinition> for GameDefinition {
                     name: a.name,
                     color: a.color.to_bevy(),
                     piece: PieceDef {
-                        valid_moves: a
-                            .valid_moves
-                            .into_iter()
-                            .map(|[x, y]| (x, y))
-                            .collect(),
+                        valid_moves: a.valid_moves.into_iter().map(|[x, y]| (x, y)).collect(),
                     },
                     blocked_by: a.blocked_by,
                     enabled: a.enabled,
