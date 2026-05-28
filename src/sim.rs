@@ -36,7 +36,79 @@ pub struct Simulation {
     /// Rolling cursor into `turn_order`; avoids a modulo in every simulated turn.
     turn_order_index: usize,
     pub turn_step: usize,
-    pub placements: Vec<(u32, PieceId)>,
+    pub placements: PlacementsLog,
+}
+
+/// Append-only placement history; [`Arc`] snapshot for UI without cloning on every worker tick.
+#[derive(Clone, Debug, Default)]
+pub struct PlacementsLog {
+    entries: Arc<Vec<(u32, PieceId)>>,
+}
+
+impl PlacementsLog {
+    fn new() -> Self {
+        Self {
+            entries: Arc::new(Vec::new()),
+        }
+    }
+
+    /// Split shared storage before mutating while the UI holds a snapshot [`Arc`].
+    pub fn ensure_unique_for_mutation(&mut self) {
+        if Arc::strong_count(&self.entries) > 1 {
+            self.entries = Arc::new(self.entries.as_ref().clone());
+        }
+    }
+
+    fn clear(&mut self) {
+        Arc::make_mut(&mut self.entries).clear();
+    }
+
+    fn push(&mut self, index: u32, piece_id: PieceId) {
+        Arc::make_mut(&mut self.entries).push((index, piece_id));
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn as_slice(&self) -> &[(u32, PieceId)] {
+        self.entries.as_ref()
+    }
+
+    pub fn arc(&self) -> Arc<Vec<(u32, PieceId)>> {
+        Arc::clone(&self.entries)
+    }
+
+    #[cfg(test)]
+    fn capacity(&self) -> usize {
+        self.entries.capacity()
+    }
+}
+
+impl std::ops::Deref for PlacementsLog {
+    type Target = [(u32, PieceId)];
+
+    fn deref(&self) -> &Self::Target {
+        self.entries.as_ref()
+    }
+}
+
+impl PartialEq for PlacementsLog {
+    fn eq(&self, other: &Self) -> bool {
+        self.entries.as_ref() == other.entries.as_ref()
+    }
+}
+
+impl PartialEq<Vec<(u32, PieceId)>> for PlacementsLog {
+    fn eq(&self, other: &Vec<(u32, PieceId)>) -> bool {
+        self.as_slice() == other.as_slice()
+    }
+}
+
+impl PartialEq<PlacementsLog> for Vec<(u32, PieceId)> {
+    fn eq(&self, other: &PlacementsLog) -> bool {
+        other == self
+    }
 }
 
 impl Simulation {
@@ -51,7 +123,7 @@ impl Simulation {
             cursor_positions: vec![(0, 0); def.pieces.len()],
             turn_order_index: 0,
             turn_step: 0,
-            placements: Vec::new(),
+            placements: PlacementsLog::new(),
         }
     }
 
@@ -87,7 +159,7 @@ impl Simulation {
                 self.record_forbidden(def, xy, piece_id);
             });
             crate::place_profile::time_placements_push(|| {
-                self.placements.push((index, piece_id));
+                self.placements.push(index, piece_id);
             });
             if let Some(place_start) = place_start {
                 crate::place_profile::add_place_total_ns(place_start.elapsed().as_nanos() as u64);
@@ -95,13 +167,13 @@ impl Simulation {
         } else {
             self.occupancy.insert(index, piece_id);
             self.record_forbidden(def, xy, piece_id);
-            self.placements.push((index, piece_id));
+            self.placements.push(index, piece_id);
         }
         #[cfg(not(feature = "place_profile"))]
         {
             self.occupancy.insert(index, piece_id);
             self.record_forbidden(def, xy, piece_id);
-            self.placements.push((index, piece_id));
+            self.placements.push(index, piece_id);
         }
     }
 
@@ -121,6 +193,76 @@ impl Simulation {
     /// One piece takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
         self.step_turn_scan::<false>(def, &mut 0)
+    }
+
+    /// Spiral cells rejected as forbidden (not occupied) on the next `step_turn` scan for the upcoming piece.
+    pub fn forbidden_skips_on_next_scan(&self, _def: &GameDefinition) -> Vec<u32> {
+        let mut skips = Vec::new();
+        let turn_order_len = self.active_turn_order.len();
+        if turn_order_len == 0 {
+            return skips;
+        }
+        let piece_id = self.active_turn_order[self.turn_order_index];
+        let occupancy = &self.occupancy;
+        let attack_layers = &self.attack_layers;
+        let respected = &self.respected_attackers[piece_id];
+        let mut cursor = self.cursors[piece_id];
+        let mut xy = self.cursor_positions[piece_id];
+        let mut forb_word =
+            combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+
+        loop {
+            let bit = 1u64 << (cursor & 63);
+            let occupied = occupancy.contains_index(cursor);
+            let forbidden_here = forb_word & bit != 0;
+            if !occupied && !forbidden_here {
+                break;
+            }
+            if forbidden_here && !occupied {
+                skips.push(cursor);
+            }
+
+            let next = cursor + 1;
+            if next == 0 {
+                break;
+            }
+
+            let word_end = ((cursor >> 6) + 1) << 6;
+            if next < word_end {
+                let shift = next & 63;
+                let len = word_end - next;
+                let tail_mask = (1u64 << len) - 1;
+                if ((forb_word >> shift) & tail_mask) == tail_mask {
+                    for c in next..word_end {
+                        let tail_bit = 1u64 << (c & 63);
+                        if forb_word & tail_bit != 0 && !occupancy.contains_index(c) {
+                            skips.push(c);
+                        }
+                    }
+                    cursor = word_end;
+                    xy = self.visit_order.index_to_xy(word_end);
+                    if cursor == u32::MAX {
+                        break;
+                    }
+                    forb_word =
+                        combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+                    continue;
+                }
+            }
+
+            cursor = next;
+            xy = self.visit_order.scan_step_xy(cursor - 1, xy);
+
+            if cursor == u32::MAX {
+                break;
+            }
+
+            if (cursor & 63) == 0 {
+                forb_word =
+                    combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
+            }
+        }
+        skips
     }
 
     /// Like `step_turn`, but accumulates scan/place timings (requires feature `place_profile`).
@@ -261,6 +403,7 @@ impl Simulation {
             return;
         }
         self.occupancy.ensure_unique_for_mutation();
+        self.placements.ensure_unique_for_mutation();
         let start = Instant::now();
         let mut turns_since_check = 0u32;
         while self.needs_work(def, target_index) {

@@ -38,6 +38,16 @@ pub struct SavedUiState {
     pub sidebar: SidebarSections,
     #[serde(default)]
     pub board_colour_mode: BoardColourMode,
+    #[serde(default = "default_show_hover_placement_path")]
+    pub show_hover_placement_path: bool,
+    #[serde(default)]
+    pub show_hover_attack_squares: bool,
+    #[serde(default)]
+    pub show_hover_forbidden_skips: bool,
+}
+
+fn default_show_hover_placement_path() -> bool {
+    true
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -79,6 +89,9 @@ pub fn capture_session(
             roster_remove_piece: ui_state.roster_remove_piece,
             add_piece_color: SavedColor::from_bevy(ui_state.add_piece_color),
             board_colour_mode: ui_state.board_colour_mode,
+            show_hover_placement_path: ui_state.show_hover_placement_path,
+            show_hover_attack_squares: ui_state.show_hover_attack_squares,
+            show_hover_forbidden_skips: ui_state.show_hover_forbidden_skips,
             bookmark_selected,
             sidebar: ui_state.sidebar.clone(),
         },
@@ -101,6 +114,9 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.roster_remove_piece = saved.roster_remove_piece.min(n.saturating_sub(1));
     ui_state.add_piece_color = saved.add_piece_color.to_bevy();
     ui_state.board_colour_mode = saved.board_colour_mode;
+    ui_state.show_hover_placement_path = saved.show_hover_placement_path;
+    ui_state.show_hover_attack_squares = saved.show_hover_attack_squares;
+    ui_state.show_hover_forbidden_skips = saved.show_hover_forbidden_skips;
     ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
@@ -286,6 +302,9 @@ mod tests {
         ui.sync_attack_squares = true;
         ui.attack_edit_symmetry = AttackEditSymmetry::Rot4;
         ui.advanced_load_preset_index = 3;
+        ui.show_hover_placement_path = false;
+        ui.show_hover_attack_squares = true;
+        ui.show_hover_forbidden_skips = true;
         let session = capture_session(
             &def,
             CameraSessionConfig {
@@ -307,5 +326,8 @@ mod tests {
         assert!(loaded.ui.sync_attack_squares);
         assert_eq!(loaded.ui.attack_edit_symmetry, AttackEditSymmetry::Rot4);
         assert_eq!(loaded.ui.advanced_load_preset_index, 3);
+        assert!(!loaded.ui.show_hover_placement_path);
+        assert!(loaded.ui.show_hover_attack_squares);
+        assert!(loaded.ui.show_hover_forbidden_skips);
     }
 }

@@ -1,6 +1,7 @@
 pub mod app_profile;
 pub mod app_session;
 pub mod board_export;
+pub mod board_hover;
 pub mod bookmark_config;
 pub mod calibration_config;
 pub mod camera;
@@ -15,6 +16,7 @@ pub mod mutate;
 pub mod perf_harness;
 #[cfg(feature = "place_profile")]
 pub mod place_profile;
+pub mod placement_path;
 pub mod random_gen;
 pub mod render;
 pub mod share_code;

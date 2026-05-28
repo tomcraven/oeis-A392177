@@ -78,6 +78,12 @@ pub struct SidebarSections {
 pub struct UiState {
     pub draft: Option<GameDefinition>,
     pub board_colour_mode: BoardColourMode,
+    /// Draw hot-pink chain of same-piece placements when hovering occupied cells on the board.
+    pub show_hover_placement_path: bool,
+    /// Highlight attack squares of the hovered piece in hot pink.
+    pub show_hover_attack_squares: bool,
+    /// Highlight forbidden cells skipped while scanning to the hovered placement.
+    pub show_hover_forbidden_skips: bool,
     pub random_gen: RandomGenConfig,
     pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
@@ -121,6 +127,9 @@ impl Default for UiState {
         Self {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
+            show_hover_placement_path: true,
+            show_hover_attack_squares: false,
+            show_hover_forbidden_skips: false,
             random_gen: RandomGenConfig::default(),
             random_pieces_config: RandomPiecesConfig::default(),
             mutate_piece: 0,
@@ -459,6 +468,32 @@ pub fn ui_game_definition(
                             if let Some(status) = &ui_state.export_status {
                                 ui.label(status);
                             }
+
+                            ui.add_space(4.0);
+                            ui.separator();
+                            ui.add_space(4.0);
+
+                            ui.checkbox(
+                                &mut ui_state.show_hover_placement_path,
+                                "Show placement path on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
+                            );
+                            ui.checkbox(
+                                &mut ui_state.show_hover_attack_squares,
+                                "Show attack squares on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, highlight every square that piece attacks from its current position.",
+                            );
+                            ui.checkbox(
+                                &mut ui_state.show_hover_forbidden_skips,
+                                "Show forbidden skips on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, highlight spiral cells that piece skipped because they were forbidden (not occupied) on the scan that placed there.",
+                            );
 
                             ui.add_space(4.0);
                             ui.separator();

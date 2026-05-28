@@ -72,6 +72,80 @@ pub fn grid_to_world(x: i32, y: i32) -> Vec2 {
     Vec2::new((x as f32 + 0.5) * CELL_SIZE, (y as f32 + 0.5) * CELL_SIZE)
 }
 
+/// Window cursor position → board world (board camera, logical pixels).
+pub fn screen_to_board_world(
+    cursor: Vec2,
+    camera_transform: &Transform,
+    ortho: &OrthographicProjection,
+    left_inset_px: f32,
+    board_width_px: f32,
+    board_height_px: f32,
+) -> Vec2 {
+    let half_w = ortho.area.width() * 0.5;
+    let half_h = ortho.area.height() * 0.5;
+    let center = camera_transform.translation.truncate();
+    let u = ((cursor.x - left_inset_px) / board_width_px.max(1.0)).clamp(0.0, 1.0);
+    let v = (cursor.y / board_height_px.max(1.0)).clamp(0.0, 1.0);
+    Vec2::new(
+        center.x - half_w + u * (2.0 * half_w),
+        center.y + half_h - v * (2.0 * half_h),
+    )
+}
+
+pub fn world_to_screen_on_board(
+    world: Vec2,
+    camera_transform: &Transform,
+    ortho: &OrthographicProjection,
+    left_inset_px: f32,
+    board_width_px: f32,
+    board_height_px: f32,
+) -> bevy_egui::egui::Pos2 {
+    let half_w = ortho.area.width() * 0.5;
+    let half_h = ortho.area.height() * 0.5;
+    let center = camera_transform.translation.truncate();
+    let u = (world.x - (center.x - half_w)) / (2.0 * half_w);
+    let v = (center.y + half_h - world.y) / (2.0 * half_h);
+    bevy_egui::egui::Pos2::new(
+        left_inset_px + u * board_width_px,
+        v * board_height_px,
+    )
+}
+
+pub fn board_panel_size(window: &Window, left_inset_px: f32) -> (f32, f32) {
+    let board_w = (window.width() - left_inset_px).max(1.0);
+    let board_h = window.height().max(1.0);
+    (board_w, board_h)
+}
+
+pub fn cursor_on_board_panel(cursor: Vec2, left_inset_px: f32, board_height_px: f32) -> bool {
+    cursor.x >= left_inset_px && cursor.y >= 0.0 && cursor.y <= board_height_px
+}
+
+/// Spiral index under the window cursor on the board panel, if the cursor is over the panel.
+pub fn spiral_index_at_cursor(
+    cursor: Vec2,
+    camera_transform: &Transform,
+    ortho: &OrthographicProjection,
+    left_inset_px: f32,
+    board_width_px: f32,
+    board_height_px: f32,
+    visit_order: VisitOrder,
+) -> Option<u32> {
+    if !cursor_on_board_panel(cursor, left_inset_px, board_height_px) {
+        return None;
+    }
+    let world = screen_to_board_world(
+        cursor,
+        camera_transform,
+        ortho,
+        left_inset_px,
+        board_width_px,
+        board_height_px,
+    );
+    let (gx, gy) = world_to_grid(world);
+    Some(visit_order.xy_to_index(gx, gy))
+}
+
 pub fn viewport_grid_bounds(
     camera_transform: &Transform,
     ortho: &OrthographicProjection,

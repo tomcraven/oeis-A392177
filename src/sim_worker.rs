@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use std::time::Duration;
 
 use bevy::prelude::Resource;
@@ -6,12 +7,24 @@ use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
 use crate::sim::{OccupancyGrid, Simulation};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct SimDisplay {
     pub occupancy: OccupancyGrid,
     pub cursors: Vec<u32>,
-    pub placements_len: usize,
+    /// Turn-ordered log for hover placement paths (derived on the UI thread).
+    pub placements: Arc<Vec<(u32, crate::model::PieceId)>>,
     pub turn_step: usize,
+}
+
+impl Default for SimDisplay {
+    fn default() -> Self {
+        Self {
+            occupancy: OccupancyGrid::default(),
+            cursors: Vec::new(),
+            placements: Arc::new(Vec::new()),
+            turn_step: 0,
+        }
+    }
 }
 
 fn display_from_sim(sim: &Simulation) -> SimDisplay {
@@ -20,7 +33,7 @@ fn display_from_sim(sim: &Simulation) -> SimDisplay {
     let display = SimDisplay {
         occupancy: sim.occupancy.clone(),
         cursors: sim.cursors.clone(),
-        placements_len: sim.placements.len(),
+        placements: sim.placements.arc(),
         turn_step: sim.turn_step,
     };
     #[cfg(feature = "app_profile")]
@@ -228,6 +241,7 @@ mod threaded {
     ) {
         loop {
             sim.occupancy.ensure_unique_for_mutation();
+            sim.placements.ensure_unique_for_mutation();
             let start = Instant::now();
             let mut turns = 0u32;
 

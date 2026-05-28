@@ -14,6 +14,9 @@ use crate::board_export::BoardExportDialogState;
 #[cfg(target_family = "wasm")]
 use crate::board_export::BoardExportWasmJob;
 use crate::board_export::{BoardExportPending, run_board_export};
+use crate::board_hover::{
+    draw_hover_attack_squares, draw_hover_forbidden_skips, draw_hover_placement_paths,
+};
 use crate::camera::{self, camera_controls};
 use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
@@ -86,6 +89,14 @@ pub fn configure_app(app: &mut App) {
             .chain(),
     )
     .add_systems(EguiPrimaryContextPass, ui_game_definition);
+    app.add_systems(
+        EguiPrimaryContextPass,
+        (
+            draw_hover_placement_paths.after(ui_game_definition),
+            draw_hover_attack_squares.after(ui_game_definition),
+            draw_hover_forbidden_skips.after(ui_game_definition),
+        ),
+    );
     #[cfg(target_family = "wasm")]
     app.add_systems(Update, crate::wasm_clipboard::poll_wasm_share_code_paste);
     app.add_systems(
@@ -109,7 +120,7 @@ pub fn configure_app(app: &mut App) {
         camera::camera_zoom_controls.after(write_egui_wants_input_system),
         camera::camera_pointer_controls.after(write_egui_wants_input_system),
         perf_harness_advance_script,
-        sync_simulation_to_viewport,
+        sync_simulation_to_viewport.after(EguiPostUpdateSet::EndPass),
         app_session::persist_app_session.after(EguiPostUpdateSet::EndPass),
         draw_spiral_cells,
         camera::clamp_camera_zoom_to_texture_limit,
