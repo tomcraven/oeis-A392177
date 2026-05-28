@@ -14,6 +14,7 @@ use crate::board_export::BoardExportDialogState;
 #[cfg(target_family = "wasm")]
 use crate::board_export::BoardExportWasmJob;
 use crate::board_export::{BoardExportPending, run_board_export};
+#[cfg(not(target_family = "wasm"))]
 use crate::board_hover::{
     draw_hover_attack_squares, draw_hover_neighbor_placement_scan, draw_hover_placement_paths,
 };
@@ -89,6 +90,7 @@ pub fn configure_app(app: &mut App) {
             .chain(),
     )
     .add_systems(EguiPrimaryContextPass, ui_game_definition);
+    #[cfg(not(target_family = "wasm"))]
     app.add_systems(
         EguiPrimaryContextPass,
         (

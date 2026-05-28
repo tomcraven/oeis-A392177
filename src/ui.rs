@@ -126,7 +126,7 @@ pub struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        Self {
+        let mut state = Self {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
             show_hover_placement_path: true,
@@ -154,9 +154,23 @@ impl Default for UiState {
             share_code_copied_at: None,
             sim_config_history: SimConfigHistory::default(),
             suppress_sim_history: false,
-        }
+        };
+        clear_board_hover_debug_for_wasm(&mut state);
+        state
     }
 }
+
+/// Board hover overlays are native-only; keep flags off on wasm even if something sets them.
+#[cfg(target_family = "wasm")]
+pub fn clear_board_hover_debug_for_wasm(ui_state: &mut UiState) {
+    ui_state.show_hover_placement_path = false;
+    ui_state.show_hover_attack_squares = false;
+    ui_state.show_hover_forbidden_skips = false;
+    ui_state.show_hover_succeeding_cell_info = false;
+}
+
+#[cfg(not(target_family = "wasm"))]
+pub fn clear_board_hover_debug_for_wasm(_ui_state: &mut UiState) {}
 
 fn sidebar_collapsing(
     ui: &mut egui::Ui,
@@ -398,6 +412,8 @@ pub fn ui_game_definition(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
+
+    clear_board_hover_debug_for_wasm(&mut ui_state);
 
     let mut draft = ui_state
         .draft

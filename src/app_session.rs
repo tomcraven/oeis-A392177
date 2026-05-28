@@ -121,6 +121,7 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.show_hover_attack_squares = saved.show_hover_attack_squares;
     ui_state.show_hover_forbidden_skips = saved.show_hover_forbidden_skips;
     ui_state.show_hover_succeeding_cell_info = saved.show_hover_succeeding_cell_info;
+    crate::ui::clear_board_hover_debug_for_wasm(ui_state);
     ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
