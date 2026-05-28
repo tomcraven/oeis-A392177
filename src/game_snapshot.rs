@@ -27,6 +27,7 @@ fn default_enabled() -> bool {
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct SavedGameDefinition {
+    #[serde(alias = "armies")]
     pub pieces: Vec<SavedArmy>,
     pub turn_order: Vec<PieceId>,
 }
@@ -115,6 +116,14 @@ impl DiscoverRunConfig {
 mod tests {
     use super::*;
     use crate::model::GameDefinition;
+
+    #[test]
+    fn saved_game_accepts_legacy_armies_field() {
+        let json = r#"{"armies":[{"name":"a","color":{"r":1.0,"g":0.0,"b":0.0,"a":1.0},"valid_moves":[[1,0]],"blocked_by":[],"enabled":true}],"turn_order":[0]}"#;
+        let loaded: SavedGameDefinition = serde_json::from_str(json).unwrap();
+        assert_eq!(loaded.pieces.len(), 1);
+        assert_eq!(loaded.pieces[0].name, "a");
+    }
 
     #[test]
     fn knight_pairwise_round_trips_through_toml() {

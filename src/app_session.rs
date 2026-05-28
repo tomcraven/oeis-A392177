@@ -9,6 +9,7 @@ use crate::camera_config::CameraSessionConfig;
 use crate::game_snapshot::{SavedColor, SavedGameDefinition};
 use crate::model::GameDefinition;
 use crate::random_gen::{RandomGenConfig, RandomPiecesConfig};
+use crate::mutate::AttackEditSymmetry;
 use crate::ui::{BoardColourMode, SidebarSections, UiState};
 use crate::viewport::ViewportState;
 
@@ -23,6 +24,10 @@ pub struct SavedUiState {
     pub edit_piece: usize,
     #[serde(default)]
     pub sync_attack_squares: bool,
+    #[serde(default)]
+    pub attack_edit_symmetry: AttackEditSymmetry,
+    #[serde(default)]
+    pub advanced_load_preset_index: usize,
     pub bookmark_new_name: String,
     pub add_piece_preset_index: usize,
     pub roster_remove_piece: usize,
@@ -67,6 +72,8 @@ pub fn capture_session(
             preset_index: ui_state.preset_index,
             edit_piece: ui_state.edit_piece,
             sync_attack_squares: ui_state.sync_attack_squares,
+            attack_edit_symmetry: ui_state.attack_edit_symmetry,
+            advanced_load_preset_index: ui_state.advanced_load_preset_index,
             bookmark_new_name: ui_state.bookmark_new_name.clone(),
             add_piece_preset_index: ui_state.add_piece_preset_index,
             roster_remove_piece: ui_state.roster_remove_piece,
@@ -87,6 +94,8 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.preset_index = saved.preset_index;
     ui_state.edit_piece = saved.edit_piece.min(n.saturating_sub(1));
     ui_state.sync_attack_squares = saved.sync_attack_squares;
+    ui_state.attack_edit_symmetry = saved.attack_edit_symmetry;
+    ui_state.advanced_load_preset_index = saved.advanced_load_preset_index;
     ui_state.bookmark_new_name = saved.bookmark_new_name.clone();
     ui_state.add_piece_preset_index = saved.add_piece_preset_index;
     ui_state.roster_remove_piece = saved.roster_remove_piece.min(n.saturating_sub(1));
@@ -275,6 +284,8 @@ mod tests {
         ui.sidebar.pieces = true;
         ui.sidebar.pieces_summary = true;
         ui.sync_attack_squares = true;
+        ui.attack_edit_symmetry = AttackEditSymmetry::Rot4;
+        ui.advanced_load_preset_index = 3;
         let session = capture_session(
             &def,
             CameraSessionConfig {
@@ -294,5 +305,7 @@ mod tests {
         assert!(loaded.ui.sidebar.pieces);
         assert!(loaded.ui.sidebar.pieces_summary);
         assert!(loaded.ui.sync_attack_squares);
+        assert_eq!(loaded.ui.attack_edit_symmetry, AttackEditSymmetry::Rot4);
+        assert_eq!(loaded.ui.advanced_load_preset_index, 3);
     }
 }

@@ -1,4 +1,5 @@
 use rand::Rng;
+use serde::{Deserialize, Serialize};
 
 use crate::model::{Piece, PieceId};
 
@@ -176,6 +177,103 @@ fn normalize_moves(moves: &mut Vec<(i32, i32)>) {
     moves.dedup();
 }
 
+/// How many attack cells to toggle together in the piece editor grid.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttackEditSymmetry {
+    #[default]
+    None,
+    /// `(x, y)` and `(-x, y)` — same as [`reflect_across_y_axis`] on the pattern.
+    MirrorX,
+    /// `(x, y)` and `(x, -y)` — same as [`reflect_across_x_axis`].
+    MirrorY,
+    /// Both mirrors: up to four quadrants `(±x, ±y)`.
+    MirrorBoth,
+    /// Four-fold rotation: `(x,y)`, `(-y,x)`, `(-x,-y)`, `(y,-x)`.
+    Rot4,
+    /// Full dihedral eight-fold on the integer grid.
+    Rot8,
+}
+
+impl AttackEditSymmetry {
+    pub const ALL: [Self; 6] = [
+        Self::None,
+        Self::MirrorX,
+        Self::MirrorY,
+        Self::MirrorBoth,
+        Self::Rot4,
+        Self::Rot8,
+    ];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::None => "None",
+            Self::MirrorX => "Mirror X",
+            Self::MirrorY => "Mirror Y",
+            Self::MirrorBoth => "Mirror X+Y",
+            Self::Rot4 => "4-fold rot",
+            Self::Rot8 => "8-fold",
+        }
+    }
+}
+
+/// Attack offsets equivalent to `(x, y)` under `mode` (never includes origin).
+pub fn symmetry_orbit(x: i32, y: i32, mode: AttackEditSymmetry) -> Vec<(i32, i32)> {
+    if x == 0 && y == 0 {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    match mode {
+        AttackEditSymmetry::None => out.push((x, y)),
+        AttackEditSymmetry::MirrorX => {
+            push_unique(&mut out, (x, y));
+            push_unique(&mut out, (-x, y));
+        }
+        AttackEditSymmetry::MirrorY => {
+            push_unique(&mut out, (x, y));
+            push_unique(&mut out, (x, -y));
+        }
+        AttackEditSymmetry::MirrorBoth => {
+            for (dx, dy) in [(x, y), (-x, y), (x, -y), (-x, -y)] {
+                push_unique(&mut out, (dx, dy));
+            }
+        }
+        AttackEditSymmetry::Rot4 => {
+            let mut px = x;
+            let mut py = y;
+            for _ in 0..4 {
+                push_unique(&mut out, (px, py));
+                (px, py) = (-py, px);
+            }
+        }
+        AttackEditSymmetry::Rot8 => {
+            let seeds = [(x, y), (y, x)];
+            for (sx, sy) in seeds {
+                let mut px = sx;
+                let mut py = sy;
+                for _ in 0..4 {
+                    push_unique(&mut out, (px, py));
+                    push_unique(&mut out, (px, -py));
+                    (px, py) = (-py, px);
+                }
+            }
+        }
+    }
+    out.retain(|&(ox, oy)| ox != 0 || oy != 0);
+    out.sort_by_key(|&(a, b)| (a, b));
+    out.dedup();
+    out
+}
+
+fn push_unique(out: &mut Vec<(i32, i32)>, p: (i32, i32)) {
+    if p == (0, 0) {
+        return;
+    }
+    if !out.contains(&p) {
+        out.push(p);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -191,6 +289,14 @@ mod tests {
         assert_eq!(moves.len(), n);
         assert_eq!(move_extent(&moves), r);
         assert!(!moves.iter().any(|&m| m == (0, 0)));
+    }
+
+    #[test]
+    fn rot4_orbit_has_four_points_for_generic_cell() {
+        let o = symmetry_orbit(1, 2, AttackEditSymmetry::Rot4);
+        assert_eq!(o.len(), 4);
+        assert!(o.contains(&(1, 2)));
+        assert!(o.contains(&(-2, 1)));
     }
 
     #[test]

@@ -13,7 +13,7 @@ use crate::model::{GameDefinition, Piece, PieceDef};
 use crate::mutate::{
     reflect_across_x_axis, reflect_across_y_axis, rotate_ccw, rotate_cw,
     shared_attack_extent_for_pieces, shift_attacks, toggle_random_attack_square,
-    toggle_random_blocked_by,
+    toggle_random_blocked_by, AttackEditSymmetry, symmetry_orbit,
 };
 use crate::random_gen::{
     AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig, generate_random_game,
@@ -88,6 +88,10 @@ pub struct UiState {
     pub edit_piece: usize,
     /// When true, attack-square grid toggles apply to every piece in the set.
     pub sync_attack_squares: bool,
+    /// Symmetry applied when toggling cells in the Advanced attack grid.
+    pub attack_edit_symmetry: AttackEditSymmetry,
+    /// Catalog index for "Load attack preset" in Advanced piece editor.
+    pub advanced_load_preset_index: usize,
     /// Name for the next custom bookmark (Library section).
     pub bookmark_new_name: String,
     /// Selected entry in [`PieceDef::piece_catalog`] for roster add.
@@ -124,6 +128,8 @@ impl Default for UiState {
             preset_index: 0,
             edit_piece: 0,
             sync_attack_squares: false,
+            attack_edit_symmetry: AttackEditSymmetry::default(),
+            advanced_load_preset_index: 0,
             bookmark_new_name: String::new(),
             add_piece_preset_index: 0,
             roster_remove_piece: 0,
@@ -1160,11 +1166,59 @@ fn pieces_sidebar_body(ui: &mut egui::Ui, draft: &mut GameDefinition, ui_state: 
                     ui.checkbox(&mut ui_state.sync_attack_squares, "Sync all pieces")
                         .on_hover_text("When enabled, each square toggle applies to every piece");
                 });
+                sidebar_field_label(ui, "Edit symmetry");
+                egui::ComboBox::from_id_salt("attack_edit_symmetry")
+                    .selected_text(ui_state.attack_edit_symmetry.label())
+                    .show_ui(ui, |ui| {
+                        for mode in AttackEditSymmetry::ALL {
+                            if ui
+                                .selectable_label(
+                                    ui_state.attack_edit_symmetry == mode,
+                                    mode.label(),
+                                )
+                                .clicked()
+                            {
+                                ui_state.attack_edit_symmetry = mode;
+                            }
+                        }
+                    })
+                    .response
+                    .on_hover_text("When toggling a cell, apply the same on/off to symmetric cells");
+                ui.add_space(4.0);
+
+                let catalog = PieceDef::piece_catalog();
+                if ui_state.advanced_load_preset_index >= catalog.len() {
+                    ui_state.advanced_load_preset_index = 0;
+                }
+                let load_i = ui_state.advanced_load_preset_index;
+                ui.horizontal(|ui| {
+                    ui.label("Load preset");
+                    egui::ComboBox::from_id_salt("advanced_load_attack_preset")
+                        .selected_text(catalog[load_i].0)
+                        .show_ui(ui, |ui| {
+                            for (i, (label, _)) in catalog.iter().enumerate() {
+                                if ui
+                                    .selectable_label(load_i == i, *label)
+                                    .clicked()
+                                {
+                                    ui_state.advanced_load_preset_index = i;
+                                }
+                            }
+                        });
+                    if ui.button("Apply").clicked() {
+                        let preset = (catalog[load_i].1)();
+                        draft.pieces[piece_idx].piece = preset;
+                    }
+                })
+                .response
+                .on_hover_text("Replace this piece's attack pattern; keeps name, colour, and blocked-by");
+
                 move_grid_ui(
                     ui,
                     piece_idx,
                     &mut draft.pieces,
                     ui_state.sync_attack_squares,
+                    ui_state.attack_edit_symmetry,
                 );
                 if ui.button("Clear").clicked() {
                     clear_attack_squares(
@@ -1789,17 +1843,37 @@ fn apply_attack_square(
     y: i32,
     on: bool,
     sync_all: bool,
+    symmetry: AttackEditSymmetry,
 ) -> bool {
-    if attack_square_on(pieces, piece_idx, x, y) == on {
+    let orbit = symmetry_orbit(x, y, symmetry);
+    if orbit.is_empty() {
         return false;
     }
+    let mut changed = false;
     if sync_all {
         for piece in pieces.iter_mut() {
-            set_attack_square(&mut piece.piece.valid_moves, x, y, on);
+            for &(ox, oy) in &orbit {
+                if set_attack_square_if_needed(&mut piece.piece.valid_moves, ox, oy, on) {
+                    changed = true;
+                }
+            }
         }
     } else {
-        set_attack_square(&mut pieces[piece_idx].piece.valid_moves, x, y, on);
+        for &(ox, oy) in &orbit {
+            if set_attack_square_if_needed(&mut pieces[piece_idx].piece.valid_moves, ox, oy, on) {
+                changed = true;
+            }
+        }
     }
+    changed
+}
+
+fn set_attack_square_if_needed(moves: &mut Vec<(i32, i32)>, x: i32, y: i32, on: bool) -> bool {
+    let currently_on = moves.iter().any(|&m| m == (x, y));
+    if currently_on == on {
+        return false;
+    }
+    set_attack_square(moves, x, y, on);
     true
 }
 
@@ -1813,7 +1887,13 @@ fn clear_attack_squares(pieces: &mut [Piece], piece_idx: usize, sync_all: bool) 
     }
 }
 
-fn move_grid_ui(ui: &mut egui::Ui, piece_idx: usize, pieces: &mut [Piece], sync_all: bool) -> bool {
+fn move_grid_ui(
+    ui: &mut egui::Ui,
+    piece_idx: usize,
+    pieces: &mut [Piece],
+    sync_all: bool,
+    symmetry: AttackEditSymmetry,
+) -> bool {
     let radius = move_grid_radius(&pieces[piece_idx].piece.valid_moves, ATTACK_GRID_MIN_RADIUS);
     let viewport = attack_grid_viewport_side_px();
     let mut changed = false;
@@ -1827,7 +1907,14 @@ fn move_grid_ui(ui: &mut egui::Ui, piece_idx: usize, pieces: &mut [Piece], sync_
             .max_height(viewport)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                changed = attack_grid_editor_ui(ui, piece_idx, pieces, sync_all, radius);
+                changed = attack_grid_editor_ui(
+                    ui,
+                    piece_idx,
+                    pieces,
+                    sync_all,
+                    symmetry,
+                    radius,
+                );
             });
     });
 
@@ -1839,6 +1926,7 @@ fn attack_grid_editor_ui(
     piece_idx: usize,
     pieces: &mut [Piece],
     sync_all: bool,
+    symmetry: AttackEditSymmetry,
     radius: i32,
 ) -> bool {
     let cell_size = egui::Vec2::splat(ATTACK_GRID_CELL_PX);
@@ -1868,7 +1956,15 @@ fn attack_grid_editor_ui(
                         .on_hover_text(format!("({x}, {y})"))
                         .clicked()
                     {
-                        if apply_attack_square(pieces, piece_idx, x, y, !selected, sync_all) {
+                        if apply_attack_square(
+                            pieces,
+                            piece_idx,
+                            x,
+                            y,
+                            !selected,
+                            sync_all,
+                            symmetry,
+                        ) {
                             changed = true;
                         }
                     }

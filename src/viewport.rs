@@ -3,8 +3,9 @@ use std::time::Duration;
 
 use crate::CELL_SIZE;
 use crate::camera::BoardCamera;
+use crate::camera_config::CameraSessionConfig;
 use crate::index_order::VisitOrder;
-use crate::model::GameDefinition;
+use crate::model::{GameDefinition, PieceId};
 use crate::sim_worker::SimulationBridge;
 
 /// Default window size (side panel + rectangular board region).
@@ -27,6 +28,9 @@ pub struct ViewportState {
     pub left_inset_px: f32,
 }
 
+/// Typical egui sidebar width when computing share-code screenshot aspect (board panel is a rect).
+pub const DEFAULT_BOARD_LEFT_INSET_PX: f32 = 320.0;
+
 impl GridBounds {
     pub fn cell_width(&self) -> i32 {
         self.max_x - self.min_x + 1
@@ -38,6 +42,23 @@ impl GridBounds {
 
     pub fn cell_count(&self) -> u64 {
         self.cell_width().max(0) as u64 * self.cell_height().max(0) as u64
+    }
+
+    /// Axis-aligned overlap of two grid rectangles (None if disjoint).
+    pub fn intersect(self, other: Self) -> Option<Self> {
+        let min_x = self.min_x.max(other.min_x);
+        let max_x = self.max_x.min(other.max_x);
+        let min_y = self.min_y.max(other.min_y);
+        let max_y = self.max_y.min(other.max_y);
+        if min_x > max_x || min_y > max_y {
+            return None;
+        }
+        Some(Self {
+            min_x,
+            max_x,
+            min_y,
+            max_y,
+        })
     }
 }
 
@@ -90,6 +111,83 @@ pub fn viewport_grid_bounds(
         min_y: min_y - margin,
         max_y: max_y + margin,
     }
+}
+
+/// Tight axis-aligned rectangle around occupied cells (visit order defines index → xy).
+pub fn grid_bounds_from_placements(
+    placements: &[(u32, PieceId)],
+    order: VisitOrder,
+    padding: i32,
+) -> GridBounds {
+    if placements.is_empty() {
+        return GridBounds {
+            min_x: -padding,
+            max_x: padding,
+            min_y: -padding,
+            max_y: padding,
+        };
+    }
+    let mut min_x = i32::MAX;
+    let mut max_x = i32::MIN;
+    let mut min_y = i32::MAX;
+    let mut max_y = i32::MIN;
+    for &(index, _) in placements {
+        let (x, y) = order.index_to_xy(index);
+        min_x = min_x.min(x);
+        max_x = max_x.max(x);
+        min_y = min_y.min(y);
+        max_y = max_y.max(y);
+    }
+    GridBounds {
+        min_x: min_x - padding,
+        max_x: max_x + padding,
+        min_y: min_y - padding,
+        max_y: max_y + padding,
+    }
+}
+
+/// Grid rectangle visible on the board panel for a saved camera pose.
+pub fn grid_bounds_for_camera_session(camera: CameraSessionConfig) -> GridBounds {
+    grid_bounds_for_camera_session_with_inset(camera, DEFAULT_BOARD_LEFT_INSET_PX)
+}
+
+pub fn grid_bounds_for_camera_session_with_inset(
+    camera: CameraSessionConfig,
+    left_inset_px: f32,
+) -> GridBounds {
+    use bevy::camera::{CameraProjection, OrthographicProjection, ScalingMode};
+
+    let transform = Transform::from_xyz(camera.x, camera.y, 0.0);
+    let scale = camera
+        .zoom
+        .clamp(
+            crate::calibration_config::MIN_ZOOM_OUT,
+            crate::calibration_config::MAX_ZOOM_OUT_BUDGET,
+        );
+    let mut ortho = OrthographicProjection {
+        scaling_mode: ScalingMode::FixedVertical {
+            viewport_height: WINDOW_HEIGHT,
+        },
+        scale,
+        ..OrthographicProjection::default_2d()
+    };
+    ortho.update(
+        (WINDOW_WIDTH - left_inset_px).max(1.0),
+        WINDOW_HEIGHT,
+    );
+    viewport_grid_bounds(&transform, &ortho, &Window::default(), left_inset_px)
+}
+
+/// Share-code screenshot: simulation placement rect ∩ camera viewport (both axis-aligned rects).
+pub fn grid_bounds_for_share_screenshot(
+    camera: CameraSessionConfig,
+    placements: &[(u32, PieceId)],
+    visit_order: VisitOrder,
+) -> GridBounds {
+    const PADDING: i32 = 2;
+    let sim = grid_bounds_from_placements(placements, visit_order, PADDING);
+    let view = grid_bounds_for_camera_session(camera);
+    sim.intersect(view).unwrap_or(view)
 }
 
 pub fn visit_target_index_for_bounds(bounds: GridBounds, order: VisitOrder) -> u32 {

@@ -210,4 +210,127 @@ mod tests {
         let err = decode_share_code("rbk:99:AAAA").unwrap_err();
         assert!(err.contains("newer than this app"));
     }
+
+    /// One share code per non-empty line in `test-data/screenshot_sharecodes`.
+    const SCREENSHOT_SHARE_CODES: &str = include_str!("test-data/screenshot_sharecodes");
+
+    fn screenshot_share_code_lines() -> impl Iterator<Item = &'static str> {
+        SCREENSHOT_SHARE_CODES
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+    }
+
+    fn screenshot_golden_png_path(index: usize) -> std::path::PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("src/test-data")
+            .join(format!("screenshot_sharecodes_{index}.png"))
+    }
+
+    fn rgba8(color: bevy::prelude::Color) -> [u8; 4] {
+        let c = color.to_srgba();
+        [
+            (c.red.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c.green.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c.blue.clamp(0.0, 1.0) * 255.0).round() as u8,
+            (c.alpha.clamp(0.0, 1.0) * 255.0).round() as u8,
+        ]
+    }
+
+    fn share_code_screenshot_rgba(code: &str) -> (u32, u32, Vec<u8>) {
+        use bevy::prelude::Color;
+        use crate::render::{grid_texture_size, raster_spiral_grid};
+        use crate::sim::Simulation;
+
+        let snap = decode_share_code(code.trim()).unwrap();
+        let def: GameDefinition = snap.game.into();
+        let mut sim = Simulation::new(&def, snap.visit_order);
+        sim.advance_to_target(&def, snap.target_index);
+
+        let bounds = crate::viewport::grid_bounds_for_share_screenshot(
+            snap.camera,
+            &sim.placements,
+            snap.visit_order,
+        );
+        let size = grid_texture_size(bounds);
+        let empty = rgba8(Color::srgba(0.12, 0.12, 0.16, 1.0));
+        let colors: Vec<[u8; 4]> = def.pieces.iter().map(|p| rgba8(p.color)).collect();
+        let raster = raster_spiral_grid(
+            bounds,
+            size.x,
+            size.y,
+            &sim.occupancy,
+            &colors,
+            empty,
+            snap.board_colour_mode,
+        );
+        (size.x, size.y, raster)
+    }
+
+    fn encode_rgba_png(data: &[u8], width: u32, height: u32) -> Vec<u8> {
+        use png::{BitDepth, ColorType, Encoder};
+        use std::io::Cursor;
+
+        let mut buf = Vec::new();
+        let mut encoder = Encoder::new(Cursor::new(&mut buf), width, height);
+        encoder.set_color(ColorType::Rgba);
+        encoder.set_depth(BitDepth::Eight);
+        let mut writer = encoder.write_header().expect("png header");
+        writer.write_image_data(data).expect("png pixels");
+        writer.finish().expect("png finish");
+        buf
+    }
+
+    fn share_code_screenshot_png(code: &str) -> Vec<u8> {
+        let (width, height, rgba) = share_code_screenshot_rgba(code);
+        encode_rgba_png(&rgba, width, height)
+    }
+
+    #[test]
+    fn legacy_v1_share_codes_decode() {
+        let codes: Vec<_> = screenshot_share_code_lines().collect();
+        assert!(
+            !codes.is_empty(),
+            "expected share codes in test-data/screenshot_sharecodes"
+        );
+        for code in codes {
+            let snap = decode_share_code(code).expect("fixture share code must decode");
+            assert_eq!(snap.version, 1);
+            assert_eq!(snap.visit_order, VisitOrder::default());
+            assert_eq!(snap.board_colour_mode, BoardColourMode::Piece);
+            assert!(!snap.game.pieces.is_empty());
+        }
+    }
+
+    #[test]
+    #[ignore = "writes src/test-data/screenshot_sharecodes_N.png — run with --ignored"]
+    fn write_screenshot_share_code_golden_pngs() {
+        for (index, code) in screenshot_share_code_lines().enumerate() {
+            let png = share_code_screenshot_png(code);
+            let path = screenshot_golden_png_path(index);
+            std::fs::write(&path, png).unwrap_or_else(|e| {
+                panic!("failed to write {}: {e}", path.display());
+            });
+            eprintln!("wrote {}", path.display());
+        }
+    }
+
+    #[test]
+    fn screenshot_share_codes_match_golden_pngs() {
+        for (index, code) in screenshot_share_code_lines().enumerate() {
+            let path = screenshot_golden_png_path(index);
+            let expected = std::fs::read(&path).unwrap_or_else(|e| {
+                panic!(
+                    "missing golden {} (run write_screenshot_share_code_golden_pngs with --ignored): {e}",
+                    path.display()
+                );
+            });
+            let actual = share_code_screenshot_png(code);
+            assert_eq!(
+                actual, expected,
+                "PNG mismatch for screenshot_sharecodes line {index} — inspect {} before updating golden",
+                path.display()
+            );
+        }
+    }
 }
