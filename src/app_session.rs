@@ -44,6 +44,8 @@ pub struct SavedUiState {
     pub show_hover_attack_squares: bool,
     #[serde(default)]
     pub show_hover_forbidden_skips: bool,
+    #[serde(default)]
+    pub show_hover_succeeding_cell_info: bool,
 }
 
 fn default_show_hover_placement_path() -> bool {
@@ -92,6 +94,7 @@ pub fn capture_session(
             show_hover_placement_path: ui_state.show_hover_placement_path,
             show_hover_attack_squares: ui_state.show_hover_attack_squares,
             show_hover_forbidden_skips: ui_state.show_hover_forbidden_skips,
+            show_hover_succeeding_cell_info: ui_state.show_hover_succeeding_cell_info,
             bookmark_selected,
             sidebar: ui_state.sidebar.clone(),
         },
@@ -117,6 +120,7 @@ pub fn apply_session_to_ui(ui_state: &mut UiState, def: &GameDefinition, saved: 
     ui_state.show_hover_placement_path = saved.show_hover_placement_path;
     ui_state.show_hover_attack_squares = saved.show_hover_attack_squares;
     ui_state.show_hover_forbidden_skips = saved.show_hover_forbidden_skips;
+    ui_state.show_hover_succeeding_cell_info = saved.show_hover_succeeding_cell_info;
     ui_state.sidebar = saved.sidebar.clone();
     ui_state.draft = Some(def.clone());
 }
@@ -305,6 +309,7 @@ mod tests {
         ui.show_hover_placement_path = false;
         ui.show_hover_attack_squares = true;
         ui.show_hover_forbidden_skips = true;
+        ui.show_hover_succeeding_cell_info = true;
         let session = capture_session(
             &def,
             CameraSessionConfig {
@@ -329,5 +334,6 @@ mod tests {
         assert!(!loaded.ui.show_hover_placement_path);
         assert!(loaded.ui.show_hover_attack_squares);
         assert!(loaded.ui.show_hover_forbidden_skips);
+        assert!(loaded.ui.show_hover_succeeding_cell_info);
     }
 }

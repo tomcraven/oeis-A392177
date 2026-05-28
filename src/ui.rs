@@ -82,8 +82,10 @@ pub struct UiState {
     pub show_hover_placement_path: bool,
     /// Highlight attack squares of the hovered piece in hot pink.
     pub show_hover_attack_squares: bool,
-    /// Highlight forbidden cells skipped while scanning to the hovered placement.
+    /// Scan context on hover for the hovered placement (preceding-cell checkbox).
     pub show_hover_forbidden_skips: bool,
+    /// Same scan context for this piece's next placement after the hovered cell.
+    pub show_hover_succeeding_cell_info: bool,
     pub random_gen: RandomGenConfig,
     pub random_pieces_config: RandomPiecesConfig,
     /// Piece index targeted by the Mutate section (when `mutate_all` is false).
@@ -130,6 +132,7 @@ impl Default for UiState {
             show_hover_placement_path: true,
             show_hover_attack_squares: false,
             show_hover_forbidden_skips: false,
+            show_hover_succeeding_cell_info: false,
             random_gen: RandomGenConfig::default(),
             random_pieces_config: RandomPiecesConfig::default(),
             mutate_piece: 0,
@@ -473,32 +476,6 @@ pub fn ui_game_definition(
                             ui.separator();
                             ui.add_space(4.0);
 
-                            ui.checkbox(
-                                &mut ui_state.show_hover_placement_path,
-                                "Show placement path on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
-                            );
-                            ui.checkbox(
-                                &mut ui_state.show_hover_attack_squares,
-                                "Show attack squares on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, highlight every square that piece attacks from its current position.",
-                            );
-                            ui.checkbox(
-                                &mut ui_state.show_hover_forbidden_skips,
-                                "Show forbidden skips on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, highlight spiral cells that piece skipped because they were forbidden (not occupied) on the scan that placed there.",
-                            );
-
-                            ui.add_space(4.0);
-                            ui.separator();
-                            ui.add_space(4.0);
-
                             if let Ok((mut transform, mut projection, pan)) = camera_q.single_mut()
                             {
                                 if let Projection::Orthographic(ref mut ortho) = *projection {
@@ -761,6 +738,37 @@ pub fn ui_game_definition(
                             ui_state.sidebar.debug,
                             false,
                             |ui| {
+                                ui.checkbox(
+                                    &mut ui_state.show_hover_placement_path,
+                                    "Show placement path on hover",
+                                )
+                                .on_hover_text(
+                                    "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
+                                );
+                                ui.checkbox(
+                                    &mut ui_state.show_hover_attack_squares,
+                                    "Show attack squares on hover",
+                                )
+                                .on_hover_text(
+                                    "Over an occupied cell, highlight every square that piece attacks from its current position.",
+                                );
+                                ui.checkbox(
+                                    &mut ui_state.show_hover_forbidden_skips,
+                                    "Show preceding-cell info on hover",
+                                )
+                                .on_hover_text(
+                                    "Over an occupied cell, show the scan that placed it: green anchor on that cell, hot pink on its previous same-piece placement, amber/cyan skips and pink lines to blockers.",
+                                );
+                                ui.checkbox(
+                                    &mut ui_state.show_hover_succeeding_cell_info,
+                                    "Show succeeding-cell info on hover",
+                                )
+                                .on_hover_text(
+                                    "When this piece placed again later, show that scan too: orange anchor on the next same-piece placement, hot pink on the hovered cell as its previous placement, same skip colours and blocker lines.",
+                                );
+
+                                ui.separator();
+
                                 if let Some(bounds) = viewport.bounds {
                                     let grid_size = grid_texture_size(bounds);
                                     ui.label(format!(

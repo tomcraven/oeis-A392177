@@ -11,6 +11,12 @@ const EMPTY_ARMY: PieceId = usize::MAX;
 /// Sentinel for unoccupied spiral indices (shared with render).
 pub(crate) const EMPTY_ARMY_SLOT: PieceId = EMPTY_ARMY;
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ScanSkips {
+    pub forbidden: Vec<u32>,
+    pub occupied: Vec<u32>,
+}
+
 fn resize_piece_vectors<T: Clone>(vec: &mut Vec<T>, len: usize, fill: T) {
     if vec.len() == len {
         vec.fill(fill);
@@ -195,12 +201,13 @@ impl Simulation {
         self.step_turn_scan::<false>(def, &mut 0)
     }
 
-    /// Spiral cells rejected as forbidden (not occupied) on the next `step_turn` scan for the upcoming piece.
-    pub fn forbidden_skips_on_next_scan(&self, _def: &GameDefinition) -> Vec<u32> {
-        let mut skips = Vec::new();
+    /// Cells the upcoming piece skips on its next scan: attacked-but-empty vs already occupied.
+    pub fn scan_skips_on_next_scan(&self, _def: &GameDefinition) -> ScanSkips {
+        let mut forbidden = Vec::new();
+        let mut occupied = Vec::new();
         let turn_order_len = self.active_turn_order.len();
         if turn_order_len == 0 {
-            return skips;
+            return ScanSkips { forbidden, occupied };
         }
         let piece_id = self.active_turn_order[self.turn_order_index];
         let occupancy = &self.occupancy;
@@ -211,16 +218,24 @@ impl Simulation {
         let mut forb_word =
             combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
 
+        let mut record_skip = |index: u32, forb_word: u64| {
+            let bit = 1u64 << (index & 63);
+            let forbidden_here = forb_word & bit != 0;
+            if occupancy.contains_index(index) {
+                occupied.push(index);
+            } else if forbidden_here {
+                forbidden.push(index);
+            }
+        };
+
         loop {
             let bit = 1u64 << (cursor & 63);
-            let occupied = occupancy.contains_index(cursor);
+            let occupied_here = occupancy.contains_index(cursor);
             let forbidden_here = forb_word & bit != 0;
-            if !occupied && !forbidden_here {
+            if !occupied_here && !forbidden_here {
                 break;
             }
-            if forbidden_here && !occupied {
-                skips.push(cursor);
-            }
+            record_skip(cursor, forb_word);
 
             let next = cursor + 1;
             if next == 0 {
@@ -234,10 +249,7 @@ impl Simulation {
                 let tail_mask = (1u64 << len) - 1;
                 if ((forb_word >> shift) & tail_mask) == tail_mask {
                     for c in next..word_end {
-                        let tail_bit = 1u64 << (c & 63);
-                        if forb_word & tail_bit != 0 && !occupancy.contains_index(c) {
-                            skips.push(c);
-                        }
+                        record_skip(c, forb_word);
                     }
                     cursor = word_end;
                     xy = self.visit_order.index_to_xy(word_end);
@@ -262,7 +274,42 @@ impl Simulation {
                     combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
             }
         }
-        skips
+        ScanSkips { forbidden, occupied }
+    }
+
+    /// Spiral cells rejected as forbidden (not occupied) on the next `step_turn` scan for the upcoming piece.
+    pub fn forbidden_skips_on_next_scan(&self, def: &GameDefinition) -> Vec<u32> {
+        self.scan_skips_on_next_scan(def).forbidden
+    }
+
+    /// Respected attackers whose cumulative attack bitset covers `index` during `scanning_piece`'s scan.
+    pub fn respected_forbidden_attackers(&self, scanning_piece: PieceId, index: u32) -> Vec<PieceId> {
+        let Some(respected) = self.respected_attackers.get(scanning_piece) else {
+            return Vec::new();
+        };
+        respected
+            .iter()
+            .copied()
+            .filter(|&attacker| self.attack_layers[attacker].contains_index(index))
+            .collect()
+    }
+
+    /// Latest placement of `attacker` in this state's history whose move pattern hits `target_index`.
+    pub fn placement_blocking_attacker(
+        &self,
+        def: &GameDefinition,
+        attacker: PieceId,
+        target_index: u32,
+    ) -> Option<u32> {
+        for &(from_index, pid) in self.placements.as_slice().iter().rev() {
+            if pid != attacker {
+                continue;
+            }
+            if placement_attacks_index(def, self.visit_order, from_index, attacker, target_index) {
+                return Some(from_index);
+            }
+        }
+        None
     }
 
     /// Like `step_turn`, but accumulates scan/place timings (requires feature `place_profile`).
@@ -470,6 +517,13 @@ impl OccupancyGrid {
         (piece_id != EMPTY_ARMY).then_some(piece_id)
     }
 
+    pub fn index_of_piece(&self, piece_id: PieceId) -> Option<u32> {
+        self.cells_slice()
+            .iter()
+            .enumerate()
+            .find_map(|(index, &occupant)| (occupant == piece_id).then_some(index as u32))
+    }
+
     pub fn cells_slice(&self) -> &[PieceId] {
         self.cells.as_ref()
     }
@@ -511,7 +565,6 @@ impl ForbiddenSet {
         }
     }
 
-    #[cfg(test)]
     fn contains_index(&self, index: u32) -> bool {
         let bit = 1u64 << (index & 63);
         self.words.get(index as usize >> 6).copied().unwrap_or(0) & bit != 0
@@ -565,6 +618,21 @@ fn respected_attackers(def: &GameDefinition) -> Vec<Vec<PieceId>> {
 
 fn active_turn_order(def: &GameDefinition) -> Vec<PieceId> {
     def.active_turn_order().iter().collect()
+}
+
+pub(crate) fn placement_attacks_index(
+    def: &GameDefinition,
+    visit_order: VisitOrder,
+    from_index: u32,
+    attacker: PieceId,
+    target_index: u32,
+) -> bool {
+    let (x, y) = visit_order.index_to_xy(from_index);
+    def.piece(attacker)
+        .piece
+        .valid_moves
+        .iter()
+        .any(|&(dx, dy)| visit_order.xy_to_index(x + dx, y + dy) == target_index)
 }
 
 fn combined_forbidden_word(
@@ -1000,6 +1068,28 @@ mod tests {
         assert!(sim.attack_layers[0].contains_index(attacked));
         assert!(sim.occupancy.contains_index(0));
         assert!(sim.occupancy.contains_index(1));
+    }
+
+    #[test]
+    fn placement_blocking_attacker_matches_move_pattern() {
+        let def = GameDefinition::knight_2_pairwise();
+        let mut sim = Simulation::new(&def, VisitOrder::default());
+        for turn in 0..32 {
+            let scanning = sim.active_turn_order[sim.turn_order_index];
+            let skips = sim.scan_skips_on_next_scan(&def);
+            for &skip in &skips.forbidden {
+                for attacker in sim.respected_forbidden_attackers(scanning, skip) {
+                    let from = sim
+                        .placement_blocking_attacker(&def, attacker, skip)
+                        .expect("attacker in forbidden layer must threaten from a placement");
+                    assert!(
+                        placement_attacks_index(&def, sim.visit_order, from, attacker, skip),
+                        "turn {turn} skip {skip} attacker {attacker} from {from}"
+                    );
+                }
+            }
+            assert!(sim.step_turn(&def), "turn {turn}");
+        }
     }
 
     #[test]

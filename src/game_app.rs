@@ -15,7 +15,7 @@ use crate::board_export::BoardExportDialogState;
 use crate::board_export::BoardExportWasmJob;
 use crate::board_export::{BoardExportPending, run_board_export};
 use crate::board_hover::{
-    draw_hover_attack_squares, draw_hover_forbidden_skips, draw_hover_placement_paths,
+    draw_hover_attack_squares, draw_hover_neighbor_placement_scan, draw_hover_placement_paths,
 };
 use crate::camera::{self, camera_controls};
 use crate::index_order::VisitOrder;
@@ -94,7 +94,7 @@ pub fn configure_app(app: &mut App) {
         (
             draw_hover_placement_paths.after(ui_game_definition),
             draw_hover_attack_squares.after(ui_game_definition),
-            draw_hover_forbidden_skips.after(ui_game_definition),
+            draw_hover_neighbor_placement_scan.after(ui_game_definition),
         ),
     );
     #[cfg(target_family = "wasm")]
