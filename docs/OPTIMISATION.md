@@ -458,3 +458,31 @@ Session baseline with the active-turn-order cache in tree: `TIME_SIM_ITERS=25`, 
 - **Late-game-gated idempotent `ForbiddenSet::insert`** — retry of skip-if-set only after `turn_step >= 16_384`, based on high redundant-bit rates. The gate did not avoid the branch/read cost; representative medians regressed (`knight_2_pairwise` 3.196 ms, `king_6_clique` 3.251 ms); reverted.
 
 **Kept:** none in this second sim-only pass. The exact algorithm still appears constrained by first-legal spiral order plus per-placement attack indexing. Fundamental changes left on the table are deliberately larger: offline precomputed attack tables, piece-specific closed-form attack indexing, or a different forbidden representation that avoids per-move `(x,y) -> index` without adding per-scan cost.
+
+## Kept (2026-05-28 — advance scan cursor past the placed cell)
+
+**Hypothesis:** Previously `cursors[piece_id]` was left pointing AT the cell that piece just placed on. The very first iteration of that piece's next scan therefore re-tested a cell that was guaranteed to be self-occupied — a mandatory wasted loop iteration per piece per turn. After the attack-layer / active-turn-order wins, scan was still ~33% of `step_turn`; eliminating one mandatory scan iteration per turn should remove ~⅓ of cells examined.
+
+**Change:** `step_turn_scan` now stores `cursors[piece_id] = cursor + 1` (saturating) and `cursor_positions[piece_id] = scan_step_xy(cursor, xy)` on a successful placement, so the next scan for the same piece starts at the cell *after* the just-placed cell. Cursor semantics shift from "last placed" to "next cell to scan" (initial value `0` matches "scan from index 0" on a fresh sim, same as before). `needs_work` and `scan_skips_on_next_scan` continue to read this cursor with the new semantics — the latter no longer reports the just-placed cell as an occupied skip, since `same_piece_path_to` already surfaces it as the previous placement.
+
+`profile_place` (`cargo run --release --features place_profile,bevy/dynamic_linking --bin profile_place`) confirms ~1 cell/place removed across bench cases:
+
+| Case | cells/place before | cells/place after |
+| --- | ---: | ---: |
+| `knight_2_pairwise` | 2.67 | **1.68** |
+| `knight_3_clique` | 2.95 | **1.97** |
+| `leaper_4_mixed_clique` | 2.94 | **1.96** |
+| `king_6_clique` | 2.97 | **1.99** |
+| `chimera_3_clique` | 2.36 | **1.37** |
+
+`time_sim` medians (`TIME_SIM_ITERS=20`, `TIME_SIM_WARMUP=2`, three harness passes; averaged median across passes); checksums unchanged on every run; `cargo testd` passes:
+
+| Case | before avg median | after avg median | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 3.149 | **3.041** | −3.4% |
+| `knight_3_clique` | 3.386 | **3.150** | −7.0% |
+| `leaper_4_mixed_clique` | 3.400 | **3.176** | −6.6% |
+| `king_6_clique` | 3.458 | **3.227** | −6.7% |
+| `chimera_3_clique` | 4.792 | **4.502** | −6.1% |
+
+Differs from the rejected 2026-05-27 "cursor-only scan loop" experiment: that one removed `xy` tracking inside the loop and paid one extra `index_to_xy` on every successful turn. This change only advances `cursor`/`xy` by **one** spiral step on placement (a cheap `scan_step_xy` call) and shaves a guaranteed-occupied iteration on every subsequent scan for that piece. Test `representative_preset_placements_remain_legal` still enforces `index_to_xy(cursor) == cursor_positions[piece]`. The `forbidden_cells_are_cached_per_piece` regression test was updated to read the just-placed `xy` from the placements log instead of `cursor_positions`.

@@ -367,8 +367,13 @@ impl Simulation {
             let occupied = occupancy.contains_index(cursor);
             let forbidden_here = forb_word & bit != 0;
             if !occupied && !forbidden_here {
-                self.cursors[piece_id] = cursor;
-                self.cursor_positions[piece_id] = xy;
+                // Advance past the cell we are about to occupy so the next scan
+                // for this piece doesn't waste an iteration confirming a self-
+                // placed occupied cell.
+                let next_cursor = cursor.saturating_add(1);
+                let next_xy = self.visit_order.scan_step_xy(cursor, xy);
+                self.cursors[piece_id] = next_cursor;
+                self.cursor_positions[piece_id] = next_xy;
                 self.place(def, cursor, xy, piece_id);
                 return true;
             }
@@ -1057,7 +1062,14 @@ mod tests {
         sim.step_turn(&def);
         sim.step_turn(&def);
 
-        let red_xy = sim.cursor_positions[1];
+        let red_placement = sim
+            .placements
+            .as_slice()
+            .iter()
+            .rev()
+            .find_map(|&(idx, pid)| (pid == 1).then_some(idx))
+            .expect("red placement");
+        let red_xy = index_to_xy(red_placement);
         for &(dx, dy) in &def.pieces[1].piece.valid_moves {
             let attacked = xy_to_index(red_xy.0 + dx, red_xy.1 + dy);
             assert!(sim.attack_layers[1].contains_index(attacked));
