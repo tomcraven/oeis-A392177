@@ -211,14 +211,12 @@ mod tests {
         assert!(err.contains("newer than this app"));
     }
 
-    /// One share code per non-empty line in `test-data/screenshot_sharecodes`.
-    const SCREENSHOT_SHARE_CODES: &str = include_str!("test-data/screenshot_sharecodes");
+    /// Share codes in `test-data/screenshot_sharecodes.json` (JSON string array).
+    const SCREENSHOT_SHARE_CODES_JSON: &str = include_str!("test-data/screenshot_sharecodes.json");
 
-    fn screenshot_share_code_lines() -> impl Iterator<Item = &'static str> {
-        SCREENSHOT_SHARE_CODES
-            .lines()
-            .map(str::trim)
-            .filter(|line| !line.is_empty())
+    fn screenshot_share_codes() -> Vec<String> {
+        serde_json::from_str(SCREENSHOT_SHARE_CODES_JSON)
+            .expect("valid test-data/screenshot_sharecodes.json")
     }
 
     fn screenshot_golden_png_path(index: usize) -> std::path::PathBuf {
@@ -288,12 +286,12 @@ mod tests {
 
     #[test]
     fn legacy_v1_share_codes_decode() {
-        let codes: Vec<_> = screenshot_share_code_lines().collect();
+        let codes = screenshot_share_codes();
         assert!(
             !codes.is_empty(),
-            "expected share codes in test-data/screenshot_sharecodes"
+            "expected share codes in test-data/screenshot_sharecodes.json"
         );
-        for code in codes {
+        for code in &codes {
             let snap = decode_share_code(code).expect("fixture share code must decode");
             assert_eq!(snap.version, 1);
             assert_eq!(snap.visit_order, VisitOrder::default());
@@ -305,8 +303,8 @@ mod tests {
     #[test]
     #[ignore = "writes src/test-data/screenshot_sharecodes_N.png — run with --ignored"]
     fn write_screenshot_share_code_golden_pngs() {
-        for (index, code) in screenshot_share_code_lines().enumerate() {
-            let png = share_code_screenshot_png(code);
+        for (index, code) in screenshot_share_codes().into_iter().enumerate() {
+            let png = share_code_screenshot_png(&code);
             let path = screenshot_golden_png_path(index);
             std::fs::write(&path, png).unwrap_or_else(|e| {
                 panic!("failed to write {}: {e}", path.display());
@@ -317,7 +315,7 @@ mod tests {
 
     #[test]
     fn screenshot_share_codes_match_golden_pngs() {
-        for (index, code) in screenshot_share_code_lines().enumerate() {
+        for (index, code) in screenshot_share_codes().into_iter().enumerate() {
             let path = screenshot_golden_png_path(index);
             let expected = std::fs::read(&path).unwrap_or_else(|e| {
                 panic!(
@@ -325,10 +323,10 @@ mod tests {
                     path.display()
                 );
             });
-            let actual = share_code_screenshot_png(code);
+            let actual = share_code_screenshot_png(&code);
             assert_eq!(
                 actual, expected,
-                "PNG mismatch for screenshot_sharecodes line {index} — inspect {} before updating golden",
+                "PNG mismatch for screenshot_sharecodes.json entry {index} — inspect {} before updating golden",
                 path.display()
             );
         }
