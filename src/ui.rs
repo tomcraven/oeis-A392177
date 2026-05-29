@@ -2,7 +2,6 @@ use bevy::prelude::*;
 use bevy_egui::{EguiContexts, egui};
 use serde::{Deserialize, Serialize};
 
-#[cfg(not(target_family = "wasm"))]
 use crate::CELL_SIZE;
 use crate::board_export;
 use crate::bookmark_config::{Bookmark, BookmarkStore};
@@ -19,13 +18,51 @@ use crate::random_gen::{
     AttackSymmetry, RandomGenConfig, RandomPieceSlot, RandomPiecesConfig, generate_random_game,
     generate_random_pieces_game,
 };
-use crate::render::RenderCache;
-#[cfg(not(target_family = "wasm"))]
-use crate::render::grid_texture_size;
+use crate::render::{RenderCache, grid_texture_size};
 use crate::share_code::{self, ShareCapture};
 use crate::sim_config_history::{SimConfigHistory, SimConfigSnapshot};
 use crate::sim_worker::SimulationBridge;
 use crate::viewport::{self, ViewportState};
+
+/// Smoothed simulation throughput for the native Debug panel (not persisted).
+#[derive(Resource, Default)]
+pub struct SimDebugStats {
+    smoothed_placements_per_sec: f64,
+    last_turn_step: usize,
+}
+
+impl SimDebugStats {
+    /// Update smoothed throughput when placements advance (Bevy `Time` delta; works on wasm).
+    fn observe(&mut self, turn_step: usize, delta_secs: f64) {
+        let d = turn_step.saturating_sub(self.last_turn_step);
+        if d > 0 && delta_secs > 0.0 {
+            let rate = d as f64 / delta_secs;
+            self.smoothed_placements_per_sec =
+                self.smoothed_placements_per_sec * 0.85 + rate * 0.15;
+        }
+        self.last_turn_step = turn_step;
+    }
+
+    fn placements_per_sec(&self) -> f64 {
+        self.smoothed_placements_per_sec
+    }
+}
+
+fn format_byte_size(bytes: usize) -> String {
+    const GIB: f64 = 1024.0 * 1024.0 * 1024.0;
+    const MIB: f64 = 1024.0 * 1024.0;
+    const KIB: f64 = 1024.0;
+    let b = bytes as f64;
+    if b >= GIB {
+        format!("{:.2} GiB", b / GIB)
+    } else if b >= MIB {
+        format!("{:.1} MiB", b / MIB)
+    } else if b >= KIB {
+        format!("{:.0} KiB", b / KIB)
+    } else {
+        format!("{bytes} B")
+    }
+}
 
 /// How occupied spiral cells are coloured on the board texture.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
@@ -126,7 +163,7 @@ pub struct UiState {
 
 impl Default for UiState {
     fn default() -> Self {
-        let mut state = Self {
+        Self {
             draft: None,
             board_colour_mode: BoardColourMode::default(),
             show_hover_placement_path: true,
@@ -154,23 +191,9 @@ impl Default for UiState {
             share_code_copied_at: None,
             sim_config_history: SimConfigHistory::default(),
             suppress_sim_history: false,
-        };
-        clear_board_hover_debug_for_wasm(&mut state);
-        state
+        }
     }
 }
-
-/// Board hover overlays are native-only; keep flags off on wasm even if something sets them.
-#[cfg(target_family = "wasm")]
-pub fn clear_board_hover_debug_for_wasm(ui_state: &mut UiState) {
-    ui_state.show_hover_placement_path = false;
-    ui_state.show_hover_attack_squares = false;
-    ui_state.show_hover_forbidden_skips = false;
-    ui_state.show_hover_succeeding_cell_info = false;
-}
-
-#[cfg(not(target_family = "wasm"))]
-pub fn clear_board_hover_debug_for_wasm(_ui_state: &mut UiState) {}
 
 fn sidebar_collapsing(
     ui: &mut egui::Ui,
@@ -401,6 +424,8 @@ pub fn ui_game_definition(
     mut viewport: ResMut<ViewportState>,
     mut camera_actions: ResMut<PendingCameraAction>,
     mut board_export_pending: ResMut<board_export::BoardExportPending>,
+    mut sim_debug_stats: ResMut<SimDebugStats>,
+    time: Res<Time>,
     #[cfg(not(target_family = "wasm"))] board_export_dialog: NonSend<
         board_export::BoardExportDialogState,
     >,
@@ -412,8 +437,6 @@ pub fn ui_game_definition(
     let Ok(ctx) = contexts.ctx_mut() else {
         return;
     };
-
-    clear_board_hover_debug_for_wasm(&mut ui_state);
 
     let mut draft = ui_state
         .draft
@@ -744,83 +767,122 @@ pub fn ui_game_definition(
                         draft.turn_order = (0..draft.pieces.len()).collect();
                     }
 
-                    #[cfg(not(target_family = "wasm"))]
-                    {
-                        ui.separator();
-                        ui_state.sidebar.debug = sidebar_collapsing(
-                            ui,
-                            "debug",
-                            "Debug",
-                            ui_state.sidebar.debug,
-                            false,
-                            |ui| {
-                                ui.checkbox(
-                                    &mut ui_state.show_hover_placement_path,
-                                    "Show placement path on hover",
-                                )
-                                .on_hover_text(
-                                    "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
-                                );
-                                ui.checkbox(
-                                    &mut ui_state.show_hover_attack_squares,
-                                    "Show attack squares on hover",
-                                )
-                                .on_hover_text(
-                                    "Over an occupied cell, highlight every square that piece attacks from its current position.",
-                                );
-                                ui.checkbox(
-                                    &mut ui_state.show_hover_forbidden_skips,
-                                    "Show preceding-cell info on hover",
-                                )
-                                .on_hover_text(
-                                    "Over an occupied cell, show the scan that placed it: green anchor on that cell, hot pink on its previous same-piece placement, amber/cyan skips and pink lines to blockers.",
-                                );
-                                ui.checkbox(
-                                    &mut ui_state.show_hover_succeeding_cell_info,
-                                    "Show succeeding-cell info on hover",
-                                )
-                                .on_hover_text(
-                                    "When this piece placed again later, show that scan too: orange anchor on the next same-piece placement, hot pink on the hovered cell as its previous placement, same skip colours and blocker lines.",
-                                );
+                    ui.separator();
+                    ui_state.sidebar.debug = sidebar_collapsing(
+                        ui,
+                        "debug",
+                        "Debug",
+                        ui_state.sidebar.debug,
+                        false,
+                        |ui| {
+                            ui.checkbox(
+                                &mut ui_state.show_hover_placement_path,
+                                "Show placement path on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
+                            );
+                            ui.checkbox(
+                                &mut ui_state.show_hover_attack_squares,
+                                "Show attack squares on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, highlight every square that piece attacks from its current position.",
+                            );
+                            ui.checkbox(
+                                &mut ui_state.show_hover_forbidden_skips,
+                                "Show preceding-cell info on hover",
+                            )
+                            .on_hover_text(
+                                "Over an occupied cell, show the scan that placed it: green anchor on that cell, hot pink on its previous same-piece placement, amber/cyan skips and pink lines to blockers.",
+                            );
+                            ui.checkbox(
+                                &mut ui_state.show_hover_succeeding_cell_info,
+                                "Show succeeding-cell info on hover",
+                            )
+                            .on_hover_text(
+                                "When this piece placed again later, show that scan too: orange anchor on the next same-piece placement, hot pink on the hovered cell as its previous placement, same skip colours and blocker lines.",
+                            );
 
-                                ui.separator();
+                            ui.separator();
 
-                                if let Some(bounds) = viewport.bounds {
-                                    let grid_size = grid_texture_size(bounds);
-                                    ui.label(format!(
-                                        "Grid cells: {} x {}",
-                                        grid_size.x, grid_size.y
-                                    ));
-                                    ui.label(format!(
-                                        "Render texels: {}",
-                                        grid_size.x as u64 * grid_size.y as u64
-                                    ));
-                                    ui.label(format!("Target index: {}", viewport.target_index));
+                            sim_debug_stats.observe(
+                                sim.display.turn_step,
+                                time.delta_secs() as f64,
+                            );
+                            let display = &sim.display;
+                            ui.label("Simulation");
+                            ui.label(format!("Turn step: {}", display.turn_step));
+                            ui.label(format!("Placements: {}", display.placements.len()));
+                            ui.label(format!(
+                                "Throughput: {:.0} placements/s",
+                                sim_debug_stats.placements_per_sec()
+                            ));
+                            let budget = display.mem_budget_bytes.max(1);
+                            let pct = 100.0 * display.footprint_bytes as f64 / budget as f64;
+                            ui.label(format!(
+                                "Sim heap (est.): {} / {} ({pct:.1}%)",
+                                format_byte_size(display.footprint_bytes),
+                                format_byte_size(display.mem_budget_bytes),
+                            ));
+                            ui.label(format!(
+                                "Occupancy slots: {}",
+                                display.occupancy.cells_slice().len()
+                            ));
+                            ui.label(format!(
+                                "Saturated: {}",
+                                if display.saturated { "yes" } else { "no" }
+                            ));
+                            ui.label(format!(
+                                "Worker: {}",
+                                if sim.is_busy() { "busy" } else { "idle" }
+                            ));
+                            ui.label(format!(
+                                "Needs fill: {}",
+                                if sim.needs_work(def.as_ref(), viewport.target_index) {
+                                    "yes"
                                 } else {
-                                    ui.label("Grid cells: pending");
+                                    "no"
                                 }
+                            ));
 
-                                if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
-                                    (camera_q.single(), window_q.single())
-                                {
-                                    let board_width_px =
-                                        (window.width() - viewport.left_inset_px).ceil().max(1.0);
-                                    let world_per_screen_px =
-                                        ortho.area.width() / board_width_px.max(1.0);
-                                    let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
-                                    let board_pixels = board_width_px as u64
-                                        * window.height().ceil().max(1.0) as u64;
-                                    ui.label(format!("Zoom scale: {:.3}", ortho.scale));
-                                    ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
-                                    ui.label(format!("Board pixels: {board_pixels}"));
-                                    ui.label(format!(
-                                        "Left inset px: {:.0}",
-                                        viewport.left_inset_px
-                                    ));
-                                }
+                            ui.separator();
+
+                            if let Some(bounds) = viewport.bounds {
+                                let grid_size = grid_texture_size(bounds);
+                                ui.label(format!(
+                                    "Grid cells: {} x {}",
+                                    grid_size.x, grid_size.y
+                                ));
+                                ui.label(format!(
+                                    "Render texels: {}",
+                                    grid_size.x as u64 * grid_size.y as u64
+                                ));
+                                ui.label(format!("Target index: {}", viewport.target_index));
+                            } else {
+                                ui.label("Grid cells: pending");
+                            }
+
+                            if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
+                                (camera_q.single(), window_q.single())
+                            {
+                                let board_width_px =
+                                    (window.width() - viewport.left_inset_px).ceil().max(1.0);
+                                let world_per_screen_px =
+                                    ortho.area.width() / board_width_px.max(1.0);
+                                let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
+                                let board_pixels = board_width_px as u64
+                                    * window.height().ceil().max(1.0) as u64;
+                                ui.label(format!("Zoom scale: {:.3}", ortho.scale));
+                                ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
+                                ui.label(format!("Board pixels: {board_pixels}"));
+                                ui.label(format!(
+                                    "Left inset px: {:.0}",
+                                    viewport.left_inset_px
+                                ));
+                            }
                             },
                         );
-                    }
                 });
         });
     viewport.left_inset_px = panel_response.response.rect.width();

@@ -14,7 +14,6 @@ use crate::board_export::BoardExportDialogState;
 #[cfg(target_family = "wasm")]
 use crate::board_export::BoardExportWasmJob;
 use crate::board_export::{BoardExportPending, run_board_export};
-#[cfg(not(target_family = "wasm"))]
 use crate::board_hover::{
     draw_hover_attack_squares, draw_hover_neighbor_placement_scan, draw_hover_placement_paths,
 };
@@ -53,6 +52,7 @@ pub fn configure_app(app: &mut App) {
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
     .init_resource::<GameDefinition>()
     .init_resource::<UiState>()
+    .init_resource::<crate::ui::SimDebugStats>()
     .init_resource::<crate::bookmark_config::BookmarkStore>()
     .init_resource::<RenderCache>()
     .init_resource::<ViewportState>()
@@ -90,7 +90,6 @@ pub fn configure_app(app: &mut App) {
             .chain(),
     )
     .add_systems(EguiPrimaryContextPass, ui_game_definition);
-    #[cfg(not(target_family = "wasm"))]
     app.add_systems(
         EguiPrimaryContextPass,
         (

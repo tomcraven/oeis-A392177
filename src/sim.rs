@@ -203,6 +203,10 @@ impl Simulation {
         self.mem_budget_bytes = budget;
     }
 
+    pub fn memory_budget_bytes(&self) -> usize {
+        self.mem_budget_bytes
+    }
+
     /// Approximate live heap held by the sim's index-scaled structures, used for the soft budget.
     /// Cheap (three capacity reads, no atomics).
     pub fn footprint_bytes(&self) -> usize {

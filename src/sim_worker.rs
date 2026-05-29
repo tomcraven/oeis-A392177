@@ -17,6 +17,10 @@ pub struct SimDisplay {
     /// Mirrors `Simulation::is_saturated` so the main thread can stop re-requesting advances once
     /// the sim has hit its memory ceiling (it cannot make further progress at this zoom).
     pub saturated: bool,
+    /// Approximate heap for occupancy + placements log + attack grid (see `Simulation::footprint_bytes`).
+    pub footprint_bytes: usize,
+    /// Soft budget the worker uses before latching saturated (`MEM_BUDGET_BYTES` by default).
+    pub mem_budget_bytes: usize,
 }
 
 impl Default for SimDisplay {
@@ -27,6 +31,8 @@ impl Default for SimDisplay {
             placements: Arc::new(Vec::new()),
             turn_step: 0,
             saturated: false,
+            footprint_bytes: 0,
+            mem_budget_bytes: crate::sim::MEM_BUDGET_BYTES,
         }
     }
 }
@@ -40,6 +46,8 @@ fn display_from_sim(sim: &Simulation) -> SimDisplay {
         placements: sim.placements.arc(),
         turn_step: sim.turn_step,
         saturated: sim.is_saturated(),
+        footprint_bytes: sim.footprint_bytes(),
+        mem_budget_bytes: sim.memory_budget_bytes(),
     };
     #[cfg(feature = "app_profile")]
     crate::app_profile::note_display_clone_ns(start.elapsed().as_nanos() as u64);
