@@ -14,6 +14,9 @@ pub struct SimDisplay {
     /// Turn-ordered log for hover placement paths (derived on the UI thread).
     pub placements: Arc<Vec<(u32, crate::model::PieceId)>>,
     pub turn_step: usize,
+    /// Mirrors `Simulation::is_saturated` so the main thread can stop re-requesting advances once
+    /// the sim has hit its memory ceiling (it cannot make further progress at this zoom).
+    pub saturated: bool,
 }
 
 impl Default for SimDisplay {
@@ -23,6 +26,7 @@ impl Default for SimDisplay {
             cursors: Vec::new(),
             placements: Arc::new(Vec::new()),
             turn_step: 0,
+            saturated: false,
         }
     }
 }
@@ -35,6 +39,7 @@ fn display_from_sim(sim: &Simulation) -> SimDisplay {
         cursors: sim.cursors.clone(),
         placements: sim.placements.arc(),
         turn_step: sim.turn_step,
+        saturated: sim.is_saturated(),
     };
     #[cfg(feature = "app_profile")]
     crate::app_profile::note_display_clone_ns(start.elapsed().as_nanos() as u64);
@@ -66,7 +71,6 @@ mod threaded {
 
     struct SimUpdate {
         display: SimDisplay,
-        job_id: u64,
         worker_idle: bool,
     }
 
@@ -113,10 +117,17 @@ mod threaded {
             loop {
                 match rx.try_recv() {
                     Ok(update) => {
-                        if update.job_id >= self.active_job_id {
-                            self.display = update.display;
-                        }
-                        if update.worker_idle && update.job_id >= self.active_job_id {
+                        // Snapshots arrive in FIFO order and the simulation only ever advances
+                        // forward (resets use job_id == u64::MAX), so every snapshot is valid,
+                        // monotonic progress. Always apply it so rendering keeps updating even
+                        // while the camera pans/zooms (which bumps `active_job_id` every frame).
+                        self.display = update.display;
+                        // `worker_idle` is emitted as the worker returns to its recv loop, so it
+                        // always means "the worker is now idle". Clear the in-flight flag whenever
+                        // we see it, regardless of job id: a stale job id here would otherwise
+                        // leave us thinking the worker is busy forever, starving panning frames
+                        // (which only request work via the `!is_busy()` branch) of new advances.
+                        if update.worker_idle {
                             self.advance_in_flight = false;
                         }
                         updated = true;
@@ -148,6 +159,12 @@ mod threaded {
 
         pub fn is_busy(&self) -> bool {
             self.advance_in_flight
+        }
+
+        /// True once the worker reported it hit the memory budget; callers should stop requesting
+        /// advances (further progress is impossible at the current zoom until a reset).
+        pub fn is_saturated(&self) -> bool {
+            self.display.saturated
         }
 
         pub fn visit_order(&self) -> VisitOrder {
@@ -196,7 +213,7 @@ mod threaded {
         let mut def = initial_def;
         let mut visit_order = initial_order;
         let mut sim = Simulation::new(&def, visit_order);
-        let _ = update_tx.send(snapshot(&sim, 0, true));
+        let _ = update_tx.send(snapshot(&sim, true));
 
         while let Ok(command) = cmd_rx.recv() {
             match command {
@@ -209,7 +226,7 @@ mod threaded {
                     visit_order = new_order;
                     sim.visit_order = visit_order;
                     sim.reset(&def);
-                    let _ = update_tx.send(snapshot(&sim, u64::MAX, true));
+                    let _ = update_tx.send(snapshot(&sim, true));
                 }
                 SimCommand::Advance {
                     target_index,
@@ -240,6 +257,12 @@ mod threaded {
         mut job_id: u64,
     ) {
         loop {
+            // Already at the memory ceiling: report idle without re-cloning the (large) backing
+            // stores so the UI keeps the region filled so far.
+            if sim.is_saturated() {
+                let _ = update_tx.send(snapshot(sim, true));
+                return;
+            }
             sim.occupancy.ensure_unique_for_mutation();
             sim.placements.ensure_unique_for_mutation();
             let start = Instant::now();
@@ -252,13 +275,13 @@ mod threaded {
                 turns += 1;
 
                 if turns % 512 == 0 {
-                    if start.elapsed() >= budget {
-                        let _ = update_tx.send(snapshot(sim, job_id, true));
+                    if start.elapsed() >= budget || sim.mem_saturated() {
+                        let _ = update_tx.send(snapshot(sim, true));
                         return;
                     }
 
                     if let Some(interrupt) = poll_interrupt(cmd_rx, job_id) {
-                        let _ = update_tx.send(snapshot(sim, job_id, false));
+                        let _ = update_tx.send(snapshot(sim, false));
                         match interrupt {
                             Interrupt::Advance {
                                 target_index: t,
@@ -277,7 +300,7 @@ mod threaded {
                                 *def = new_def;
                                 sim.visit_order = new_order;
                                 sim.reset(def);
-                                let _ = update_tx.send(snapshot(sim, u64::MAX, true));
+                                let _ = update_tx.send(snapshot(sim, true));
                                 return;
                             }
                             Interrupt::Shutdown => return,
@@ -286,7 +309,7 @@ mod threaded {
                 }
             }
 
-            let _ = update_tx.send(snapshot(sim, job_id, true));
+            let _ = update_tx.send(snapshot(sim, true));
             return;
         }
     }
@@ -340,10 +363,9 @@ mod threaded {
         }
     }
 
-    fn snapshot(sim: &Simulation, job_id: u64, worker_idle: bool) -> SimUpdate {
+    fn snapshot(sim: &Simulation, worker_idle: bool) -> SimUpdate {
         SimUpdate {
             display: display_from_sim(sim),
-            job_id,
             worker_idle,
         }
     }
@@ -391,7 +413,9 @@ impl SimulationBridge {
         self.sim
             .advance_for_duration(&self.def, self.target_index, self.budget);
         self.display = display_from_sim(&self.sim);
-        if !self.sim.needs_work(&self.def, self.target_index) {
+        // A saturated sim cannot grow further; treat it like "no work left" so we stop polling
+        // (and stop the per-frame occupancy/placement copy in `advance_for_duration`).
+        if self.sim.is_saturated() || !self.sim.needs_work(&self.def, self.target_index) {
             self.advance_in_flight = false;
         }
         true
@@ -414,6 +438,12 @@ impl SimulationBridge {
 
     pub fn is_busy(&self) -> bool {
         self.advance_in_flight
+    }
+
+    /// True once the sim hit the memory budget; callers should stop requesting advances (further
+    /// progress is impossible at the current zoom until a reset).
+    pub fn is_saturated(&self) -> bool {
+        self.sim.is_saturated()
     }
 
     pub fn visit_order(&self) -> VisitOrder {

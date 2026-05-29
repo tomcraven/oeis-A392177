@@ -143,6 +143,7 @@ pub fn builtin_scenarios() -> Vec<PerfScenario> {
                 PerfCameraStep::Hold { frames: 120 },
             ],
         },
+        wiggle_catchup_scenario(),
         PerfScenario {
             name: "pan_render_stress".into(),
             preset: "knight_2_pairwise".into(),
@@ -166,6 +167,38 @@ pub fn builtin_scenarios() -> Vec<PerfScenario> {
             ],
         },
     ]
+}
+
+/// Interaction repro: zoom out far, pan into fresh (unsimulated) territory, then *wiggle* in place
+/// for a while. While wiggling the visible target index keeps changing, so the scheduler keeps
+/// re-prioritising the worker every frame — which (the bug) starves it of uninterrupted time and
+/// the fill frontier never advances, even though the camera is effectively stationary. After the
+/// wiggle the camera holds still: with a stable target the worker should finally catch up.
+pub fn wiggle_catchup_scenario() -> PerfScenario {
+    let mut script = vec![PerfCameraStep::Hold { frames: 30 }];
+    // Pan east into a region the sim has not filled yet.
+    for _ in 0..12 {
+        script.push(PerfCameraStep::PanWorld { dx: 1500.0, dy: 0.0 });
+    }
+    // Wiggle back and forth in place (~120 frames). Net displacement is ~zero, but the target
+    // index oscillates every frame.
+    for _ in 0..60 {
+        script.push(PerfCameraStep::PanWorld { dx: 500.0, dy: 0.0 });
+        script.push(PerfCameraStep::PanWorld { dx: -500.0, dy: 0.0 });
+    }
+    // Stop. Target is now stable; the worker should catch up to it.
+    script.push(PerfCameraStep::Hold { frames: 240 });
+    PerfScenario {
+        name: "wiggle_catchup".into(),
+        preset: "knight_2_pairwise".into(),
+        initial_camera: CameraSessionConfig {
+            x: 0.0,
+            y: 0.0,
+            zoom: 16.0,
+        },
+        left_inset_px: 320.0,
+        script,
+    }
 }
 
 pub fn game_definition_for_preset(name: &str) -> Option<GameDefinition> {
@@ -287,7 +320,7 @@ pub fn setup_perf_harness(
     };
     let Some(scenario) = load_scenario_by_name(&name) else {
         panic!(
-            "unknown --perf-scenario {name:?} (built-in: origin_settled, pan_east, zoom_out_catchup, pan_render_stress, or path to .toml)"
+            "unknown --perf-scenario {name:?} (built-in: origin_settled, pan_east, zoom_out_catchup, wiggle_catchup, pan_render_stress, or path to .toml)"
         );
     };
     let Some(game) = game_definition_for_preset(&scenario.preset) else {
@@ -479,6 +512,7 @@ mod tests {
         assert!(names.contains(&"origin_settled"));
         assert!(names.contains(&"pan_east"));
         assert!(names.contains(&"zoom_out_catchup"));
+        assert!(names.contains(&"wiggle_catchup"));
         assert!(names.contains(&"pan_render_stress"));
     }
 }

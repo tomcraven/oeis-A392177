@@ -70,6 +70,9 @@ impl RandomGenConfig {
         }
         self.piece_count_min = self.piece_count_min.max(1);
         self.piece_count_max = self.piece_count_max.max(self.piece_count_min);
+        let cap = crate::model::MAX_PIECES as u32;
+        self.piece_count_max = self.piece_count_max.min(cap);
+        self.piece_count_min = self.piece_count_min.min(self.piece_count_max);
         if self.attack_radius_max < self.attack_radius_min {
             std::mem::swap(&mut self.attack_radius_min, &mut self.attack_radius_max);
         }

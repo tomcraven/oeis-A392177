@@ -403,10 +403,15 @@ fn sync_simulation_to_viewport_inner(
     }
 
     let new_target = visit_target_index_for_bounds(bounds, visit_order);
-    if new_target != viewport.target_index {
-        viewport.target_index = new_target;
-        sim.reprioritize_advance(new_target, SIM_FRAME_BUDGET);
-    } else if sim.needs_work(def, viewport.target_index) && !sim.is_busy() {
-        sim.request_advance(viewport.target_index, SIM_FRAME_BUDGET);
+    viewport.target_index = new_target;
+    // Never interrupt a running advance job for camera movement. The sim fills in monotonic
+    // spiral-index order, so a changed view never invalidates work already done: a larger target
+    // just means "keep going further" and a smaller one is already covered. The worker picks up
+    // the latest target at its next budget boundary via `request_advance` (fires only when idle).
+    // Interrupting mid-job forced a `snapshot` + full copy-on-write clone of the (tens-of-MB)
+    // occupancy grid and placements log every frame during sustained panning, which froze the
+    // fill frontier (~512 turns/frame instead of ~500k).
+    if !sim.is_saturated() && !sim.is_busy() && sim.needs_work(def, new_target) {
+        sim.request_advance(new_target, SIM_FRAME_BUDGET);
     }
 }

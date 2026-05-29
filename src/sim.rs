@@ -1,4 +1,4 @@
-use crate::model::{GameDefinition, PieceId};
+use crate::model::{GameDefinition, MAX_PIECES, PieceId};
 
 pub use crate::index_order::{IndexOrder, SquareSpiral, VisitOrder};
 use bevy::prelude::{FromWorld, Resource, World};
@@ -10,6 +10,16 @@ use bevy::platform::time::Instant;
 const EMPTY_ARMY: PieceId = usize::MAX;
 /// Sentinel for unoccupied spiral indices (shared with render).
 pub(crate) const EMPTY_ARMY_SLOT: PieceId = EMPTY_ARMY;
+
+/// Soft cap on the simulation's heap footprint (occupancy + placements + attack grid). Once a
+/// placement would push past this, the sim stops advancing and renders what it has rather than
+/// growing further. On wasm this keeps us clear of the linear-memory ceiling *including* the
+/// transient copy `ensure_unique_for_mutation` makes of occupancy+placements; on native it is set
+/// high and the fallible `try_reserve` growth is the real backstop. See [`Simulation::footprint_bytes`].
+#[cfg(target_family = "wasm")]
+pub const MEM_BUDGET_BYTES: usize = 1 << 30; // 1 GiB
+#[cfg(not(target_family = "wasm"))]
+pub const MEM_BUDGET_BYTES: usize = 12 << 30; // 12 GiB
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ScanSkips {
@@ -31,10 +41,15 @@ pub struct Simulation {
     /// Dense by spiral index because simulation placement scans are numeric and monotonic.
     /// This avoids hashing on every occupied-cell check in the hot loop.
     pub occupancy: OccupancyGrid,
-    /// Cumulative attacked cells from each piece's placements (one bitset per attacker).
-    attack_layers: Vec<ForbiddenSet>,
-    /// For each defender piece, attackers whose `attack_layers` are OR'd during its scan.
-    respected_attackers: Vec<Vec<PieceId>>,
+    /// Cumulative attacked cells in board `(x, y)` space: each cell stores a bitmask of the
+    /// attackers that hit it. Marking is a plain `row*stride+col` write (no `xy_to_index`),
+    /// and defender `d`'s scan tests `attack_grid.at(x, y) & respected_mask[d]`.
+    attack_grid: AttackGrid,
+    /// For each defender piece, a bitmask (one bit per attacker id) of the attackers whose
+    /// threats block its placement.
+    respected_mask: Vec<u32>,
+    /// Per piece, the max Chebyshev move radius — pre-grows the grid once per placement.
+    move_radius: Vec<i32>,
     /// Enabled turn order captured with the definition-derived simulation metadata.
     active_turn_order: Vec<PieceId>,
     pub cursors: Vec<u32>,
@@ -43,6 +58,12 @@ pub struct Simulation {
     turn_order_index: usize,
     pub turn_step: usize,
     pub placements: PlacementsLog,
+    /// Set once a placement could not be admitted within `mem_budget_bytes` (or a real allocation
+    /// failed). While saturated the sim refuses to advance, so the board renders the region filled
+    /// so far instead of crashing. Cleared by [`Simulation::reset`].
+    saturated: bool,
+    /// Soft heap budget for the index-scaled structures; defaults to [`MEM_BUDGET_BYTES`].
+    mem_budget_bytes: usize,
 }
 
 /// Append-only placement history; [`Arc`] snapshot for UI without cloning on every worker tick.
@@ -69,8 +90,20 @@ impl PlacementsLog {
         Arc::make_mut(&mut self.entries).clear();
     }
 
-    fn push(&mut self, index: u32, piece_id: PieceId) {
-        Arc::make_mut(&mut self.entries).push((index, piece_id));
+    /// Append an entry, growing fallibly. Returns `false` on allocation failure (wasm OOM). The
+    /// `try_reserve(1)` is a cheap capacity check on the steady-state path.
+    fn push(&mut self, index: u32, piece_id: PieceId) -> bool {
+        let entries = Arc::make_mut(&mut self.entries);
+        // Only the (rare) grow is fallible; when spare capacity exists this is a plain push.
+        if entries.len() == entries.capacity() && entries.try_reserve(1).is_err() {
+            return false;
+        }
+        entries.push((index, piece_id));
+        true
+    }
+
+    fn byte_capacity(&self) -> usize {
+        self.entries.capacity() * std::mem::size_of::<(u32, PieceId)>()
     }
 
     pub fn len(&self) -> usize {
@@ -119,31 +152,37 @@ impl PartialEq<PlacementsLog> for Vec<(u32, PieceId)> {
 
 impl Simulation {
     pub fn new(def: &GameDefinition, visit_order: VisitOrder) -> Self {
+        let respected_mask = respected_masks(def);
+        let attack_grid = AttackGrid::new(cell_width_for(&respected_mask));
         Self {
             visit_order,
             occupancy: OccupancyGrid::new(),
-            attack_layers: vec![ForbiddenSet::default(); def.pieces.len()],
-            respected_attackers: respected_attackers(def),
+            attack_grid,
+            respected_mask,
+            move_radius: move_radii(def),
             active_turn_order: active_turn_order(def),
             cursors: vec![0; def.pieces.len()],
             cursor_positions: vec![(0, 0); def.pieces.len()],
             turn_order_index: 0,
             turn_step: 0,
             placements: PlacementsLog::new(),
+            saturated: false,
+            mem_budget_bytes: MEM_BUDGET_BYTES,
         }
     }
 
     pub fn reset(&mut self, def: &GameDefinition) {
         self.occupancy.clear();
+        self.saturated = false;
         let piece_count = def.pieces.len();
-        if self.attack_layers.len() == piece_count {
-            for set in &mut self.attack_layers {
-                set.clear();
-            }
+        self.respected_mask = respected_masks(def);
+        let width = cell_width_for(&self.respected_mask);
+        if self.attack_grid.cells.width() == width {
+            self.attack_grid.clear();
         } else {
-            self.attack_layers = vec![ForbiddenSet::default(); piece_count];
+            self.attack_grid = AttackGrid::new(width);
         }
-        self.respected_attackers = respected_attackers(def);
+        self.move_radius = move_radii(def);
         self.active_turn_order = active_turn_order(def);
         resize_piece_vectors(&mut self.cursors, piece_count, 0);
         resize_piece_vectors(&mut self.cursor_positions, piece_count, (0, 0));
@@ -152,48 +191,98 @@ impl Simulation {
         self.placements.clear();
     }
 
-    fn place(&mut self, def: &GameDefinition, index: u32, xy: (i32, i32), piece_id: PieceId) {
+    /// Set once the sim stops growing (budget reached or a real allocation failed). Callers should
+    /// treat this like "no more work": stop requesting advances and render the current board.
+    pub fn is_saturated(&self) -> bool {
+        self.saturated
+    }
+
+    /// Override the soft heap budget (bytes) used to stop advancing. Mainly for tests and tuning;
+    /// production uses [`MEM_BUDGET_BYTES`]. Does not retroactively clear an existing saturation.
+    pub fn set_memory_budget_bytes(&mut self, budget: usize) {
+        self.mem_budget_bytes = budget;
+    }
+
+    /// Approximate live heap held by the sim's index-scaled structures, used for the soft budget.
+    /// Cheap (three capacity reads, no atomics).
+    pub fn footprint_bytes(&self) -> usize {
+        self.occupancy.byte_capacity()
+            + self.placements.byte_capacity()
+            + self.attack_grid.byte_capacity()
+    }
+
+    /// Soft-budget checkpoint: returns `true` (latching `saturated`) once the footprint reaches the
+    /// budget. Called from the advance loops at their existing batch cadence — not per placement —
+    /// so it is effectively free; the fallible allocations are the hard backstop in between.
+    pub fn mem_saturated(&mut self) -> bool {
+        if self.saturated {
+            return true;
+        }
+        if self.footprint_bytes() >= self.mem_budget_bytes {
+            self.saturated = true;
+            return true;
+        }
+        false
+    }
+
+    /// Commit a placement. Each of the three index-scaled structures grows *fallibly* (the
+    /// `try_reserve` is folded into its existing `Arc::make_mut`, so the common no-growth path adds
+    /// nothing). Returns `false` and marks `saturated` if any allocation fails (e.g. wasm OOM), in
+    /// which case the board renders the region filled so far instead of aborting.
+    fn place(&mut self, def: &GameDefinition, index: u32, xy: (i32, i32), piece_id: PieceId) -> bool {
         #[cfg(feature = "place_profile")]
         if crate::place_profile::profiling_active() {
             let moves = def.piece(piece_id).piece.valid_moves.len() as u64;
             crate::place_profile::note_placement_work(moves, 1);
             let place_start = crate::place_profile::timing_enabled_for_place().then(Instant::now);
             crate::place_profile::time_occupancy_insert(|| {
-                self.occupancy.insert(index, piece_id);
+                let _ = self.occupancy.insert(index, piece_id);
             });
             crate::place_profile::time_record_forbidden(|| {
-                self.record_forbidden(def, xy, piece_id);
+                let _ = self.record_forbidden(def, xy, piece_id);
             });
             crate::place_profile::time_placements_push(|| {
-                self.placements.push(index, piece_id);
+                let _ = self.placements.push(index, piece_id);
             });
             if let Some(place_start) = place_start {
                 crate::place_profile::add_place_total_ns(place_start.elapsed().as_nanos() as u64);
             }
-        } else {
-            self.occupancy.insert(index, piece_id);
-            self.record_forbidden(def, xy, piece_id);
-            self.placements.push(index, piece_id);
+            return true;
         }
-        #[cfg(not(feature = "place_profile"))]
-        {
-            self.occupancy.insert(index, piece_id);
-            self.record_forbidden(def, xy, piece_id);
-            self.placements.push(index, piece_id);
+        let ok = self.occupancy.insert(index, piece_id)
+            && self.record_forbidden(def, xy, piece_id)
+            && self.placements.push(index, piece_id);
+        if !ok {
+            self.saturated = true;
         }
+        ok
     }
 
-    fn record_forbidden(&mut self, def: &GameDefinition, xy: (i32, i32), piece_id: PieceId) {
+    fn record_forbidden(&mut self, def: &GameDefinition, xy: (i32, i32), piece_id: PieceId) -> bool {
         let moves = &def.piece(piece_id).piece.valid_moves;
-        let (x, y) = xy;
-        for &(dx, dy) in moves {
-            let attacked = self.visit_order.xy_to_index(x + dx, y + dy);
-            #[cfg(feature = "place_profile")]
-            if crate::place_profile::profiling_active() {
+        // One bit per attacker id; mark every attacked cell directly in coordinate space.
+        // No `xy_to_index` per move — just a `row*stride+col` write into the grid.
+        let bit = if piece_id < MAX_PIECES {
+            1u32 << piece_id
+        } else {
+            0
+        };
+        if !self
+            .attack_grid
+            .record(xy.0, xy.1, bit, self.move_radius[piece_id], moves)
+        {
+            return false;
+        }
+
+        #[cfg(feature = "place_profile")]
+        if crate::place_profile::profiling_active() {
+            let (x, y) = xy;
+            for &(dx, dy) in moves {
+                let attacked = self.visit_order.xy_to_index(x + dx, y + dy);
                 crate::place_profile::push_forbidden_record(piece_id, attacked);
             }
-            self.attack_layers[piece_id].insert(attacked);
         }
+        true
     }
 
     /// One piece takes a turn: scan from its cursor for the first legal square.
@@ -210,69 +299,28 @@ impl Simulation {
             return ScanSkips { forbidden, occupied };
         }
         let piece_id = self.active_turn_order[self.turn_order_index];
-        let occupancy = &self.occupancy;
-        let attack_layers = &self.attack_layers;
-        let respected = &self.respected_attackers[piece_id];
+        let respected_mask = self.respected_mask[piece_id];
         let mut cursor = self.cursors[piece_id];
         let mut xy = self.cursor_positions[piece_id];
-        let mut forb_word =
-            combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
-
-        let mut record_skip = |index: u32, forb_word: u64| {
-            let bit = 1u64 << (index & 63);
-            let forbidden_here = forb_word & bit != 0;
-            if occupancy.contains_index(index) {
-                occupied.push(index);
-            } else if forbidden_here {
-                forbidden.push(index);
-            }
-        };
 
         loop {
-            let bit = 1u64 << (cursor & 63);
-            let occupied_here = occupancy.contains_index(cursor);
-            let forbidden_here = forb_word & bit != 0;
+            let occupied_here = self.occupancy.contains_index(cursor);
+            let forbidden_here = self.attack_grid.at(xy.0, xy.1) & respected_mask != 0;
             if !occupied_here && !forbidden_here {
                 break;
             }
-            record_skip(cursor, forb_word);
+            if occupied_here {
+                occupied.push(cursor);
+            } else {
+                forbidden.push(cursor);
+            }
 
-            let next = cursor + 1;
+            let next = cursor.wrapping_add(1);
             if next == 0 {
                 break;
             }
-
-            let word_end = ((cursor >> 6) + 1) << 6;
-            if next < word_end {
-                let shift = next & 63;
-                let len = word_end - next;
-                let tail_mask = (1u64 << len) - 1;
-                if ((forb_word >> shift) & tail_mask) == tail_mask {
-                    for c in next..word_end {
-                        record_skip(c, forb_word);
-                    }
-                    cursor = word_end;
-                    xy = self.visit_order.index_to_xy(word_end);
-                    if cursor == u32::MAX {
-                        break;
-                    }
-                    forb_word =
-                        combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
-                    continue;
-                }
-            }
-
             cursor = next;
             xy = self.visit_order.scan_step_xy(cursor - 1, xy);
-
-            if cursor == u32::MAX {
-                break;
-            }
-
-            if (cursor & 63) == 0 {
-                forb_word =
-                    combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
-            }
         }
         ScanSkips { forbidden, occupied }
     }
@@ -282,15 +330,18 @@ impl Simulation {
         self.scan_skips_on_next_scan(def).forbidden
     }
 
-    /// Respected attackers whose cumulative attack bitset covers `index` during `scanning_piece`'s scan.
+    /// Respected attackers whose cumulative attacks cover `index` during `scanning_piece`'s scan.
     pub fn respected_forbidden_attackers(&self, scanning_piece: PieceId, index: u32) -> Vec<PieceId> {
-        let Some(respected) = self.respected_attackers.get(scanning_piece) else {
+        let Some(&mask) = self.respected_mask.get(scanning_piece) else {
             return Vec::new();
         };
-        respected
-            .iter()
-            .copied()
-            .filter(|&attacker| self.attack_layers[attacker].contains_index(index))
+        let (x, y) = self.visit_order.index_to_xy(index);
+        let hit = self.attack_grid.at(x, y) & mask;
+        if hit == 0 {
+            return Vec::new();
+        }
+        (0..self.respected_mask.len())
+            .filter(|&attacker| hit & (1u32 << attacker) != 0)
             .collect()
     }
 
@@ -351,75 +402,47 @@ impl Simulation {
         }
         self.turn_step += 1;
 
-        let occupancy = &self.occupancy;
-        let attack_layers = &self.attack_layers;
-        let respected = &self.respected_attackers[piece_id];
+        let respected_mask = self.respected_mask[piece_id];
         // Locals avoid re-indexing `cursors`/`cursor_positions` on every scanned cell.
         let mut cursor = self.cursors[piece_id];
         let mut xy = self.cursor_positions[piece_id];
-        let mut forb_word = combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
 
         loop {
             if COUNT_CELLS {
                 *cells_examined += 1;
             }
-            let bit = 1u64 << (cursor & 63);
-            let occupied = occupancy.contains_index(cursor);
-            let forbidden_here = forb_word & bit != 0;
+            let occupied = self.occupancy.contains_index(cursor);
+            // Forbidden membership is a single coordinate-grid read masked by the
+            // attackers this piece respects — no spiral-word OR per scanned cell.
+            let forbidden_here = self.attack_grid.at(xy.0, xy.1) & respected_mask != 0;
             if !occupied && !forbidden_here {
-                // Advance past the cell we are about to occupy so the next scan
-                // for this piece doesn't waste an iteration confirming a self-
-                // placed occupied cell.
-                let next_cursor = cursor.saturating_add(1);
-                let next_xy = self.visit_order.scan_step_xy(cursor, xy);
-                self.cursors[piece_id] = next_cursor;
-                self.cursor_positions[piece_id] = next_xy;
-                self.place(def, cursor, xy, piece_id);
+                // Commit the placement. If an allocation fails (the hard backstop — e.g. wasm
+                // OOM), `place` marks the sim saturated and returns false; we leave the cursor on
+                // this cell and report no progress so the board renders what is already filled
+                // instead of aborting. The *soft* memory budget is enforced at the advance-loop
+                // checkpoints (see `mem_saturated`), keeping the per-placement path free of it.
+                if !self.place(def, cursor, xy, piece_id) {
+                    self.cursors[piece_id] = cursor;
+                    self.cursor_positions[piece_id] = xy;
+                    return false;
+                }
+                // Advance past the cell we just occupied so the next scan for this piece
+                // doesn't waste an iteration confirming a self-placed occupied cell.
+                self.cursors[piece_id] = cursor.saturating_add(1);
+                self.cursor_positions[piece_id] = self.visit_order.scan_step_xy(cursor, xy);
                 return true;
             }
 
-            let next = cursor + 1;
+            let next = cursor.wrapping_add(1);
             if next == 0 {
                 self.cursors[piece_id] = cursor;
                 self.cursor_positions[piece_id] = xy;
                 return false;
             }
-
-            let word_end = ((cursor >> 6) + 1) << 6;
-            if next < word_end {
-                let shift = next & 63;
-                let len = word_end - next;
-                let tail_mask = (1u64 << len) - 1;
-                if ((forb_word >> shift) & tail_mask) == tail_mask {
-                    #[cfg(feature = "place_profile")]
-                    crate::place_profile::note_scan_forbidden_tail_skip();
-                    cursor = word_end;
-                    xy = self.visit_order.index_to_xy(word_end);
-                    if cursor == u32::MAX {
-                        self.cursors[piece_id] = cursor;
-                        self.cursor_positions[piece_id] = xy;
-                        return false;
-                    }
-                    forb_word =
-                        combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
-                    continue;
-                }
-            }
-
             cursor = next;
             xy = self.visit_order.scan_step_xy(cursor - 1, xy);
             #[cfg(feature = "place_profile")]
             crate::place_profile::note_scan_single_step_reject();
-
-            if cursor == u32::MAX {
-                self.cursors[piece_id] = cursor;
-                self.cursor_positions[piece_id] = xy;
-                return false;
-            }
-
-            if (cursor & 63) == 0 {
-                forb_word = combined_forbidden_word(attack_layers, respected, cursor as usize >> 6);
-            }
         }
     }
 
@@ -435,12 +458,20 @@ impl Simulation {
     }
 
     pub fn advance_to_target(&mut self, def: &GameDefinition, target_index: u32) {
-        if def.pieces.is_empty() || self.active_turn_order.is_empty() {
+        if self.saturated || def.pieces.is_empty() || self.active_turn_order.is_empty() {
             return;
         }
+        let mut turns_since_check = 0u32;
         while self.needs_work(def, target_index) {
             if !self.step_turn(def) {
                 break;
+            }
+            turns_since_check += 1;
+            if turns_since_check == 4_096 {
+                if self.mem_saturated() {
+                    break;
+                }
+                turns_since_check = 0;
             }
         }
     }
@@ -451,7 +482,7 @@ impl Simulation {
         target_index: u32,
         max_duration: Duration,
     ) {
-        if def.pieces.is_empty() || self.active_turn_order.is_empty() {
+        if self.saturated || def.pieces.is_empty() || self.active_turn_order.is_empty() {
             return;
         }
         self.occupancy.ensure_unique_for_mutation();
@@ -468,7 +499,7 @@ impl Simulation {
             // Batch the check so the UI still updates while simulation uses most of
             // the allotted frame time.
             if turns_since_check == 4_096 {
-                if start.elapsed() >= max_duration {
+                if start.elapsed() >= max_duration || self.mem_saturated() {
                     break;
                 }
                 turns_since_check = 0;
@@ -500,15 +531,28 @@ impl OccupancyGrid {
         Arc::make_mut(&mut self.cells).clear();
     }
 
-    fn insert(&mut self, index: u32, piece_id: PieceId) {
+    /// Place `piece_id` at spiral `index`, growing the dense grid as needed. Returns `false` if the
+    /// grow allocation fails (wasm OOM). The fallible `try_reserve` only does work when the grid
+    /// must actually grow, so the steady-state path matches the old infallible `resize`.
+    fn insert(&mut self, index: u32, piece_id: PieceId) -> bool {
         let cells = Arc::make_mut(&mut self.cells);
         let index = index as usize;
         if index >= cells.len() {
             #[cfg(feature = "place_profile")]
             crate::place_profile::note_occupancy_grow();
+            // Only fallibly reserve when the resize would actually reallocate (index past
+            // capacity); otherwise the resize just fills spare capacity, as before.
+            if index >= cells.capacity() && cells.try_reserve(index + 1 - cells.len()).is_err() {
+                return false;
+            }
             cells.resize(index + 1, EMPTY_ARMY);
         }
         cells[index] = piece_id;
+        true
+    }
+
+    fn byte_capacity(&self) -> usize {
+        self.cells.capacity() * std::mem::size_of::<PieceId>()
     }
 
     pub fn get(&self, index: &u32) -> Option<&PieceId> {
@@ -542,83 +586,261 @@ impl OccupancyGrid {
     }
 }
 
-#[derive(Clone, Debug, Default)]
-struct ForbiddenSet {
-    words: Vec<u64>,
+/// Cell width for [`AttackGrid`]. Chosen from the highest *respected* attacker bit any defender
+/// tests, so small rosters (every preset) store one byte per cell instead of four.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum CellWidth {
+    U8,
+    U16,
+    U32,
 }
 
-impl ForbiddenSet {
-    fn clear(&mut self) {
-        self.words.clear();
+/// Smallest cell width that holds every bit a scan might test (`union` of all `respected_mask`s).
+/// Bits a non-respected attacker writes either fall below the width (harmless) or truncate to 0
+/// in [`AttackGrid::record`] — they are never read, so narrowing never changes scan results.
+fn cell_width_for(respected_mask: &[u32]) -> CellWidth {
+    let union = respected_mask.iter().fold(0u32, |acc, &m| acc | m);
+    if union < (1 << 8) {
+        CellWidth::U8
+    } else if union < (1 << 16) {
+        CellWidth::U16
+    } else {
+        CellWidth::U32
     }
+}
 
-    fn insert(&mut self, index: u32) {
-        let word_index = index as usize >> 6;
-        let bit = 1u64 << (index & 63);
-        if word_index < self.words.len() {
-            #[cfg(feature = "place_profile")]
-            {
-                let already_set = self.words[word_index] & bit != 0;
-                crate::place_profile::note_forbidden_or_existing_word(already_set);
-            }
-            self.words[word_index] |= bit;
-        } else {
-            #[cfg(feature = "place_profile")]
-            crate::place_profile::note_forbidden_or_new_word();
-            self.words.resize(word_index + 1, 0);
-            self.words[word_index] |= bit;
+/// Backing store for [`AttackGrid`]: a flat row-major grid in one of three integer widths. The
+/// variant is fixed for a sim's lifetime, so the per-call `match` is a perfectly-predicted branch.
+#[derive(Clone, Debug)]
+enum MaskCells {
+    U8(Vec<u8>),
+    U16(Vec<u16>),
+    U32(Vec<u32>),
+}
+
+impl MaskCells {
+    fn zeros(width: CellWidth, len: usize) -> Self {
+        match width {
+            CellWidth::U8 => MaskCells::U8(vec![0; len]),
+            CellWidth::U16 => MaskCells::U16(vec![0; len]),
+            CellWidth::U32 => MaskCells::U32(vec![0; len]),
         }
     }
 
-    fn contains_index(&self, index: u32) -> bool {
-        let bit = 1u64 << (index & 63);
-        self.words.get(index as usize >> 6).copied().unwrap_or(0) & bit != 0
+    fn width(&self) -> CellWidth {
+        match self {
+            MaskCells::U8(_) => CellWidth::U8,
+            MaskCells::U16(_) => CellWidth::U16,
+            MaskCells::U32(_) => CellWidth::U32,
+        }
     }
 
-    fn word_bits(&self, word_index: usize) -> u64 {
-        self.words.get(word_index).copied().unwrap_or(0)
+    fn fill_zero(&mut self) {
+        match self {
+            MaskCells::U8(v) => v.fill(0),
+            MaskCells::U16(v) => v.fill(0),
+            MaskCells::U32(v) => v.fill(0),
+        }
     }
 
-    /// Every index in `[from, to)` has its forbidden bit set.
+    fn byte_capacity(&self) -> usize {
+        match self {
+            MaskCells::U8(v) => v.capacity(),
+            MaskCells::U16(v) => v.capacity() * 2,
+            MaskCells::U32(v) => v.capacity() * 4,
+        }
+    }
+
     #[cfg(test)]
-    fn forbidden_bits_all_set(&self, from: u32, to: u32) -> bool {
-        range_bits_all_set(|word_index| self.word_bits(word_index), from, to)
+    fn capacity(&self) -> usize {
+        match self {
+            MaskCells::U8(v) => v.capacity(),
+            MaskCells::U16(v) => v.capacity(),
+            MaskCells::U32(v) => v.capacity(),
+        }
     }
 }
 
-#[cfg(test)]
-fn range_bits_all_set(word_bits: impl Fn(usize) -> u64, from: u32, to: u32) -> bool {
-    debug_assert!(from < to);
-    let mut index = from;
-    while index < to {
-        let segment_end = (((index >> 6) + 1) << 6).min(to);
-        let shift = index & 63;
-        let len = segment_end - index;
-        let mask = if len >= 64 {
-            u64::MAX
-        } else {
-            (1u64 << len) - 1
-        };
-        let bits = word_bits(index as usize >> 6) >> shift;
-        if (bits & mask) != mask {
+/// Like [`regrow_cells`] but fallible: returns `None` if the larger buffer cannot be allocated
+/// (wasm OOM) so [`AttackGrid::try_grow_to`] can stop instead of aborting.
+fn try_regrow_cells<T: Copy>(
+    old: &[T],
+    old_half: i32,
+    old_stride: usize,
+    new_half: i32,
+    new_stride: usize,
+    zero: T,
+) -> Option<Vec<T>> {
+    let len = new_stride * new_stride;
+    let mut new = Vec::new();
+    new.try_reserve_exact(len).ok()?;
+    new.resize(len, zero);
+    let col_shift = (new_half - old_half) as usize;
+    for y in -old_half..=old_half {
+        let src_row = (y + old_half) as usize * old_stride;
+        let dst_row = (y + new_half) as usize * new_stride + col_shift;
+        new[dst_row..dst_row + old_stride].copy_from_slice(&old[src_row..src_row + old_stride]);
+    }
+    Some(new)
+}
+
+/// Cumulative attacked cells in board `(x, y)` space. Each cell holds a bitmask of the
+/// attacker ids that hit it, so a defender's scan tests `at(x, y) & respected_mask` with a
+/// single masked read. Marking takes a plain `row*stride+col` write — no `xy_to_index`.
+#[derive(Clone, Debug)]
+struct AttackGrid {
+    /// Grid covers `[-half, half]` on both axes.
+    half: i32,
+    /// Row stride, `2 * half + 1`.
+    stride: usize,
+    /// `cells[(y + half) * stride + (x + half)]` = bitmask of attackers hitting `(x, y)`.
+    cells: MaskCells,
+}
+
+impl Default for AttackGrid {
+    fn default() -> Self {
+        Self::new(CellWidth::U32)
+    }
+}
+
+impl AttackGrid {
+    fn new(width: CellWidth) -> Self {
+        let half = 8i32;
+        let stride = (2 * half + 1) as usize;
+        Self {
+            half,
+            stride,
+            cells: MaskCells::zeros(width, stride * stride),
+        }
+    }
+
+    /// Reuse the allocation; clears all attacker bits (preset reload, same width).
+    fn clear(&mut self) {
+        self.cells.fill_zero();
+    }
+
+    #[inline]
+    fn at(&self, x: i32, y: i32) -> u32 {
+        if x > self.half || x < -self.half || y > self.half || y < -self.half {
+            return 0;
+        }
+        let i = (y + self.half) as usize * self.stride + (x + self.half) as usize;
+        match &self.cells {
+            MaskCells::U8(v) => v[i] as u32,
+            MaskCells::U16(v) => v[i] as u32,
+            MaskCells::U32(v) => v[i],
+        }
+    }
+
+    /// Mark every cell attacked by a piece (bit `bit`, max move radius `max_radius`) placed at
+    /// `(px, py)`. One `abs().max()` per placement checks the grid extent; the width `match` is
+    /// hoisted out of the move loop so marks stay branch-free per cell. Returns `false` if a
+    /// required grow allocation fails (wasm OOM).
+    #[inline]
+    fn record(&mut self, px: i32, py: i32, bit: u32, max_radius: i32, moves: &[(i32, i32)]) -> bool {
+        let reach = px.abs().max(py.abs()) + max_radius;
+        if reach > self.half && !self.try_grow_to(reach) {
             return false;
         }
-        index = segment_end;
+        let stride = self.stride as isize;
+        let base = (py + self.half) as isize * stride + (px + self.half) as isize;
+        match &mut self.cells {
+            MaskCells::U8(v) => {
+                let bit = bit as u8;
+                for &(dx, dy) in moves {
+                    let i = (base + dy as isize * stride + dx as isize) as usize;
+                    v[i] |= bit;
+                }
+            }
+            MaskCells::U16(v) => {
+                let bit = bit as u16;
+                for &(dx, dy) in moves {
+                    let i = (base + dy as isize * stride + dx as isize) as usize;
+                    v[i] |= bit;
+                }
+            }
+            MaskCells::U32(v) => {
+                for &(dx, dy) in moves {
+                    let i = (base + dy as isize * stride + dx as isize) as usize;
+                    v[i] |= bit;
+                }
+            }
+        }
+        true
     }
-    true
+
+    /// Grow (doubling to amortise) to cover `[-need, need]`, returning `false` if the larger buffer
+    /// cannot be allocated. A no-op (returns `true`) when `need` already fits, so it is cheap to
+    /// call before every placement.
+    #[cold]
+    fn try_grow_to(&mut self, need: i32) -> bool {
+        if need <= self.half {
+            return true;
+        }
+        let new_half = (self.half * 2).max(need + 1);
+        let new_stride = (2 * new_half + 1) as usize;
+        let new_cells = match &self.cells {
+            MaskCells::U8(v) => {
+                try_regrow_cells(v, self.half, self.stride, new_half, new_stride, 0u8)
+                    .map(MaskCells::U8)
+            }
+            MaskCells::U16(v) => {
+                try_regrow_cells(v, self.half, self.stride, new_half, new_stride, 0u16)
+                    .map(MaskCells::U16)
+            }
+            MaskCells::U32(v) => {
+                try_regrow_cells(v, self.half, self.stride, new_half, new_stride, 0u32)
+                    .map(MaskCells::U32)
+            }
+        };
+        match new_cells {
+            Some(cells) => {
+                self.half = new_half;
+                self.stride = new_stride;
+                self.cells = cells;
+                true
+            }
+            None => false,
+        }
+    }
+
+    fn byte_capacity(&self) -> usize {
+        self.cells.byte_capacity()
+    }
 }
 
-fn respected_attackers(def: &GameDefinition) -> Vec<Vec<PieceId>> {
+/// Per defender, a bitmask of the attacker ids whose threats block its placement.
+fn respected_masks(def: &GameDefinition) -> Vec<u32> {
     let piece_count = def.pieces.len();
-    let mut respected = vec![Vec::new(); piece_count];
+    debug_assert!(
+        piece_count <= MAX_PIECES,
+        "piece count {piece_count} exceeds MAX_PIECES ({MAX_PIECES})"
+    );
+    let mut masks = vec![0u32; piece_count];
     for defender in 0..piece_count {
-        for attacker in 0..piece_count {
-            if def.piece(defender).blocked_by.contains(&attacker) {
-                respected[defender].push(attacker);
+        for &attacker in &def.piece(defender).blocked_by {
+            if attacker < MAX_PIECES {
+                masks[defender] |= 1u32 << attacker;
             }
         }
     }
-    respected
+    masks
+}
+
+/// Per piece, the max Chebyshev radius of its move set (`0` when it has no moves).
+fn move_radii(def: &GameDefinition) -> Vec<i32> {
+    def.pieces
+        .iter()
+        .map(|piece| {
+            piece
+                .piece
+                .valid_moves
+                .iter()
+                .map(|&(dx, dy)| dx.abs().max(dy.abs()))
+                .max()
+                .unwrap_or(0)
+        })
+        .collect()
 }
 
 fn active_turn_order(def: &GameDefinition) -> Vec<PieceId> {
@@ -638,43 +860,6 @@ pub(crate) fn placement_attacks_index(
         .valid_moves
         .iter()
         .any(|&(dx, dy)| visit_order.xy_to_index(x + dx, y + dy) == target_index)
-}
-
-fn combined_forbidden_word(
-    layers: &[ForbiddenSet],
-    respected: &[PieceId],
-    word_index: usize,
-) -> u64 {
-    #[cfg(feature = "place_profile")]
-    if crate::place_profile::profiling_active() {
-        crate::place_profile::note_scan_forb_word_combine();
-    }
-    match respected {
-        [] => 0,
-        [a] => layers[*a].word_bits(word_index),
-        [a, b] => layers[*a].word_bits(word_index) | layers[*b].word_bits(word_index),
-        [a, b, c] => {
-            layers[*a].word_bits(word_index)
-                | layers[*b].word_bits(word_index)
-                | layers[*c].word_bits(word_index)
-        }
-        [a, b, c, d] => {
-            layers[*a].word_bits(word_index)
-                | layers[*b].word_bits(word_index)
-                | layers[*c].word_bits(word_index)
-                | layers[*d].word_bits(word_index)
-        }
-        [a, b, c, d, e] => {
-            layers[*a].word_bits(word_index)
-                | layers[*b].word_bits(word_index)
-                | layers[*c].word_bits(word_index)
-                | layers[*d].word_bits(word_index)
-                | layers[*e].word_bits(word_index)
-        }
-        _ => respected
-            .iter()
-            .fold(0u64, |acc, &a| acc | layers[a].word_bits(word_index)),
-    }
 }
 
 #[cfg(test)]
@@ -811,7 +996,14 @@ mod tests {
         const PRESET_TURNS: usize = 100_000;
         const RANDOM_TURNS: usize = 20_000;
         const LATE_WINDOW: usize = 1_000;
-        const THOUSAND: u32 = 1_000;
+        // The coordinate-grid forbidden representation has no spiral-word structure, so the
+        // forbidden word-tail skip is gone: a long forbidden run is now single-stepped (one
+        // examined cell each) rather than jumped as a single iteration. Placements are
+        // identical (golden checksums hold); worst-case examined cells per turn are therefore
+        // higher than the pre-grid ~286, but each cell is a cheap masked grid read. This guard
+        // just bounds that worst case well below a "thousands per turn" regime that would
+        // motivate a successor/rank-select structure.
+        const MAX_REJECTIONS_BOUND: u32 = 2_000;
 
         let mut global_max = 0u32;
         let mut global_max_label = String::new();
@@ -899,14 +1091,18 @@ mod tests {
 
         eprintln!(
             "=== overall max rejections: {global_max} ({global_max_label}); \
-             1000+ rejections/turn: {}",
-            if global_max >= THOUSAND { "YES" } else { "NO" }
+             bound {MAX_REJECTIONS_BOUND}: {}",
+            if global_max >= MAX_REJECTIONS_BOUND {
+                "EXCEEDED"
+            } else {
+                "ok"
+            }
         );
 
         assert!(
-            global_max < THOUSAND,
-            "did not expect >=1000 rejections per turn in this survey; \
-             got max {global_max} on {global_max_label}"
+            global_max < MAX_REJECTIONS_BOUND,
+            "scan worst case grew unexpectedly large; \
+             got max {global_max} on {global_max_label} (bound {MAX_REJECTIONS_BOUND})"
         );
     }
 
@@ -986,11 +1182,10 @@ mod tests {
     }
 
     fn backing_capacities(sim: &Simulation) -> (usize, usize, usize) {
-        let forb: usize = sim.attack_layers.iter().map(|f| f.words.capacity()).sum();
         (
             sim.occupancy.cells.capacity(),
             sim.placements.capacity(),
-            forb,
+            sim.attack_grid.cells.capacity(),
         )
     }
 
@@ -1028,18 +1223,82 @@ mod tests {
     }
 
     #[test]
-    fn forbidden_bits_all_set_covers_word_tail() {
-        let mut set = ForbiddenSet::default();
-        for index in 0..64 {
-            set.insert(index);
-        }
-        assert!(set.forbidden_bits_all_set(0, 64));
-        assert!(set.forbidden_bits_all_set(40, 64));
-        assert!(!set.forbidden_bits_all_set(40, 65));
-        for index in 64..128 {
-            set.insert(index);
-        }
-        assert!(set.forbidden_bits_all_set(64, 128));
+    fn attack_grid_growth_preserves_marks() {
+        let def = GameDefinition::knight_2_pairwise();
+        let mut grid = AttackGrid::new(CellWidth::U8);
+        // Mark a cell, force several growths, and confirm the bit survives the re-layout.
+        assert!(grid.record(3, -5, 1, 2, &[(0, 0)]));
+        assert_eq!(grid.at(3, -5), 1);
+        let _ = &def;
+        assert!(grid.record(200, -180, 0b10, 2, &[(0, 0)]));
+        assert_eq!(grid.at(3, -5), 1, "earlier mark must survive growth");
+        assert_eq!(grid.at(200, -180), 0b10);
+        assert_eq!(grid.at(199, -179), 0, "unmarked cell stays empty");
+        grid.clear();
+        assert_eq!(grid.at(3, -5), 0, "clear wipes all marks");
+        assert_eq!(grid.at(200, -180), 0);
+    }
+
+    #[test]
+    fn cell_width_matches_highest_respected_bit() {
+        assert_eq!(cell_width_for(&[]), CellWidth::U8);
+        assert_eq!(cell_width_for(&[0]), CellWidth::U8);
+        assert_eq!(cell_width_for(&[0b1, 0b1000_0000]), CellWidth::U8);
+        assert_eq!(cell_width_for(&[1 << 8]), CellWidth::U16);
+        assert_eq!(cell_width_for(&[1 << 15]), CellWidth::U16);
+        assert_eq!(cell_width_for(&[1 << 16]), CellWidth::U32);
+        assert_eq!(cell_width_for(&[1 << 31]), CellWidth::U32);
+    }
+
+    #[test]
+    fn narrow_cells_ignore_out_of_width_attacker_bits() {
+        // U8 cells: a respected bit (< 8) is stored, while a higher non-respected attacker bit
+        // truncates to zero on write and never corrupts the respected bits.
+        let mut grid = AttackGrid::new(CellWidth::U8);
+        grid.record(0, 0, (1 << 2) | (1 << 9), 1, &[(0, 0)]);
+        assert_eq!(grid.at(0, 0), 1 << 2, "bit 9 truncated, bit 2 preserved");
+
+        // U16 cells hold bits 0..16; verify a high in-range bit round-trips through growth.
+        let mut wide = AttackGrid::new(CellWidth::U16);
+        wide.record(120, -90, 1 << 12, 2, &[(0, 0)]);
+        wide.record(900, 900, 1 << 3, 2, &[(0, 0)]);
+        assert_eq!(wide.at(120, -90), 1 << 12, "wide bit survives growth");
+        assert_eq!(wide.at(900, 900), 1 << 3);
+    }
+
+    #[test]
+    fn tiny_budget_saturates_and_renders_partial_without_crashing() {
+        let def = GameDefinition::knight_2_pairwise();
+        let mut sim = Simulation::new(&def, VisitOrder::default());
+        // A few KiB only admits a handful of placements before the budget is hit.
+        sim.set_memory_budget_bytes(8 * 1024);
+        let target = 5_000_000u32;
+
+        sim.advance_to_target(&def, target);
+        assert!(sim.is_saturated(), "tiny budget must saturate");
+        let placed = sim.placements.len();
+        assert!(placed > 0, "must keep what it placed before saturating");
+        // Overshoot is at most one growth step of each structure, nowhere near the target's needs.
+        assert!(
+            sim.footprint_bytes() < 1 << 20,
+            "footprint stays bounded after saturation: {}",
+            sim.footprint_bytes()
+        );
+
+        // A saturated sim refuses further work instead of growing (or aborting).
+        sim.advance_to_target(&def, target);
+        assert_eq!(sim.placements.len(), placed, "saturated sim does not advance");
+
+        // Reset clears saturation; with the real budget it runs normally again.
+        sim.reset(&def);
+        assert!(!sim.is_saturated());
+        assert_eq!(sim.placements.len(), 0, "reset wipes placements");
+        sim.set_memory_budget_bytes(MEM_BUDGET_BYTES);
+        sim.advance_to_target(&def, 64);
+        assert!(
+            sim.placements.len() > 0 && !sim.is_saturated(),
+            "post-reset advance proceeds under the real budget"
+        );
     }
 
     #[test]
@@ -1071,13 +1330,12 @@ mod tests {
             .expect("red placement");
         let red_xy = index_to_xy(red_placement);
         for &(dx, dy) in &def.pieces[1].piece.valid_moves {
-            let attacked = xy_to_index(red_xy.0 + dx, red_xy.1 + dy);
-            assert!(sim.attack_layers[1].contains_index(attacked));
+            let (ax, ay) = (red_xy.0 + dx, red_xy.1 + dy);
+            assert!(sim.attack_grid.at(ax, ay) & (1u32 << 1) != 0);
         }
 
         let black_xy = (0, 0);
-        let attacked = xy_to_index(black_xy.0 + 1, black_xy.1 + 2);
-        assert!(sim.attack_layers[0].contains_index(attacked));
+        assert!(sim.attack_grid.at(black_xy.0 + 1, black_xy.1 + 2) & (1u32 << 0) != 0);
         assert!(sim.occupancy.contains_index(0));
         assert!(sim.occupancy.contains_index(1));
     }

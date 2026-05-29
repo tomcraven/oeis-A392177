@@ -2,6 +2,10 @@ use bevy::prelude::{Color, Resource};
 
 pub type PieceId = usize;
 
+/// Maximum pieces a definition may carry. Bounds the `u32` attacker bitmask the simulation
+/// uses for its coordinate-space forbidden grid (one bit per piece id).
+pub const MAX_PIECES: usize = 32;
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PieceDef {
     pub valid_moves: Vec<(i32, i32)>,
@@ -621,12 +625,20 @@ impl GameDefinition {
 
     /// Append a new piece using a catalog piece; default name `{label}_{id}`.
     /// `blocked_by` is wired to every other piece (same as clique presets).
+    /// Whether the roster is at the [`MAX_PIECES`] cap (no more pieces may be added).
+    pub fn is_piece_roster_full(&self) -> bool {
+        self.pieces.len() >= MAX_PIECES
+    }
+
     pub fn push_piece_from_piece_preset(
         &mut self,
         preset_label: &str,
         piece_def: PieceDef,
         color: Color,
     ) {
+        if self.is_piece_roster_full() {
+            return;
+        }
         let id = self.pieces.len();
         let n = id + 1;
         for piece in &mut self.pieces {

@@ -1603,7 +1603,7 @@ fn sidebar_min_max_drag_row<T>(
 }
 
 fn duplicate_draft_piece(draft: &mut GameDefinition, ui_state: &mut UiState, piece_idx: usize) {
-    if piece_idx >= draft.pieces.len() {
+    if piece_idx >= draft.pieces.len() || draft.is_piece_roster_full() {
         return;
     }
     let mut copy = draft.pieces[piece_idx].clone();
@@ -1709,7 +1709,11 @@ fn pieces_roster_editor_body(
                     ui_state.add_piece_color,
                     false,
                 );
-                if ui.button("Add").clicked() {
+                let roster_full = draft.is_piece_roster_full();
+                if ui
+                    .add_enabled(!roster_full, egui::Button::new("Add"))
+                    .clicked()
+                {
                     let color = ui_state.add_piece_color;
                     draft.push_piece_from_piece_preset(preset_label, preview_piece, color);
                     ui_state.add_piece_color =

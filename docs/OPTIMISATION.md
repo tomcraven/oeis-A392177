@@ -514,3 +514,177 @@ Baseline unchanged from round 10. Round 11 specifically targets the `xy_to_index
 - **Per-side closed-form attack indexing** (the deeper version of Option 2). Specialise `record_forbidden` per `piece_side ∈ {right, top, left, bottom}`, deriving each attack's `(side, ring, offset)` from the piece's known `(side, ring, offset_in_ring)` plus `(dx, dy)`, without recomputing `abs.max` or the 4-way branch. Significantly more engineering than the ring-start cache, but skips both costs that the cache couldn't beat individually.
 - **Offline precomputed `xy → index` LUT** for a smaller `|coord| ≤ 200` window (≈ 640 KB, fits L2 on M-class). Previously regressed at larger sizes, but with the post-cursor-advance access pattern it may now be different — worth re-trying.
 - **Algorithmic**: a different placement search (e.g. skip-list / interval scan over the bitset words) that calls `xy_to_index` less often per turn, rather than making each call cheaper.
+
+## Kept (2026-05-28 — `record_forbidden` visit-order dispatch hoist)
+
+**Hypothesis:** `record_forbidden` called `self.visit_order.xy_to_index(..)` once per move, so every attack re-entered the 10-arm `VisitOrder` `match` before reaching the spiral fast path. The default-spiral run never changes `visit_order` mid-game, so the per-attack enum dispatch is pure overhead on the `moves`-per-placement inner loop (8 for knight/king, 16 for chimera). Round 11 only ever measured this hoist **bundled** with a regressing ring-start precompute cache; the isolated dispatch hoist was untried.
+
+**Change:** Match on `self.visit_order` **once** at the top of `record_forbidden`. The `VisitOrder::SquareSpiral` arm calls `crate::spiral::xy_to_index` directly inside its move loop (no per-attack branch tower); a generic `order => { .. order.xy_to_index(..) .. }` arm preserves every other visit order unchanged. The `attack_layers[piece_id].insert(..)` call stays inline per iteration (hoisting the `&mut` layer ref regressed in round 10 and is deliberately not done here).
+
+`time_sim` medians (`TIME_SIM_ITERS=25`, `TIME_SIM_WARMUP=3`; interleaved A/B, 5 passes per arm, means; checksums unchanged on every run; `cargo testd --lib` passes):
+
+| Case | baseline mean | after mean | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.998 | **2.939** | −2.0% |
+| `knight_3_clique` | 3.139 | **2.954** | −5.9% |
+| `leaper_4_mixed_clique` | 3.122 | **3.008** | −3.7% |
+| `king_6_clique` | 3.234 | **3.049** | −5.7% |
+| `chimera_3_clique` | 4.528 | **4.269** | −5.7% |
+
+The gain scales with attacks-per-placement: `knight_2_pairwise` (fewest attacks, dispatch saved least often) is within jitter and showed change-slower on one of five passes; the multi-army cliques land a consistent −4–6%. WASM-safe (no codegen-profile or `unsafe` tricks; pure call-site monomorphization). Differs from the rejected round-11 attempt by **not** adding the ring-start precompute cache that dominated that change's cost.
+
+**Next targets still on the table:** unchanged from round 11 (per-side closed-form attack indexing, offline `xy → index` LUT for a small coord window, or an algorithmic placement search that calls `xy_to_index` less often).
+
+## Investigation (2026-05-28 — 2D coordinate forbidden grid; "call `xy_to_index` less often")
+
+**Where `xy_to_index` actually runs:** confirmed by reading the hot path + `rg` that, in the sim, `xy_to_index` is called **only** in `record_forbidden` (once per move per placement). The scan loop (`step_turn_scan`) never calls it — it walks `(x, y)` incrementally with `spiral_step` and only touches `index_to_xy` on the rare forbidden word-tail skip. So "make the placement *search* call `xy_to_index` less" is a misnomer; the lever is the **per-placement attack-marking fanout** (`Σ placements × moves` calls = 800k for knight, 1.6M for chimera at 100k turns).
+
+**Idea measured:** replace the per-attacker **spiral-index bitset** (`attack_layers: Vec<ForbiddenSet>`, which needs one `xy_to_index` per attacked cell) with a single **2D coordinate grid** storing a per-cell attacker bitmask. Marking becomes `mask[(py+dy+half)*stride + (px+dx+half)] |= 1<<attacker` — a plain `row*stride+col` with **zero `xy_to_index`** (one `abs().max()` per *placement* to pre-grow the grid, not per move). The scan tests `mask[cursor_xy] & respected_mask[defender] != 0` using the `(x, y)` it already tracks. Semantically identical to OR-ing the respected attackers' layers.
+
+**Harness:** `cargo run --release --features bevy/dynamic_linking --bin explore_coord_forbidden` (`src/bin/explore_coord_forbidden.rs`). Both representations run behind the **same** scan + occupancy code (a `Forbidden` trait with two impls) so the only variable is forbidden storage. The in-harness `spiral_bitset` baseline (no word-tail skip, which fires ~0.02–0.08×/place per round 8) is **representative of production** — its medians (knight_2 ~2.56, chimera ~4.43 ms) track real `time_sim` (~2.9 / ~4.5 ms).
+
+**Result (3 passes, `EXPLORE_ITERS=25`, `EXPLORE_WARMUP=3`; every preset's checksum matches the golden `time_sim` value for *both* representations):**
+
+| Case | spiral_bitset ms | coord_grid ms | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.56–2.69 | **1.32–1.37** | **−47%** |
+| `knight_3_clique` | 2.94–3.03 | **1.59–1.63** | **−46%** |
+| `leaper_4_mixed_clique` | 3.35–3.43 | **1.70–1.79** | **−48%** |
+| `king_6_clique` | 4.04–4.11 | **2.05–2.09** | **−49%** |
+| `chimera_3_clique` | 4.37–4.50 | **1.71–1.77** | **−61%** |
+
+This is the **largest sim CPU lever found since the attack-layer split** — eliminating `xy_to_index` from the place fanout (it was 60–72% of place replay per `place_profile`) roughly halves `step_turn` in the isolated harness, mechanistically consistent with the profiling. The magnitude is reproducible and checksum-exact.
+
+## Kept (2026-05-28 — coordinate forbidden grid in production)
+
+The investigation above was migrated into the production sim. `Simulation` now stores forbidden
+cells as a single `AttackGrid` (coordinate-space `Vec<u32>`, one attacker-bit per cell) plus a
+per-defender `respected_mask: Vec<u32>` and per-piece `move_radius: Vec<i32>`. `ForbiddenSet`,
+`combined_forbidden_word`, the per-attacker `attack_layers`, and the forbidden word-tail skip are
+gone. `record_forbidden` marks via `row*stride+col` (no `xy_to_index`); `step_turn_scan` and
+`scan_skips_on_next_scan` test `attack_grid.at(x, y) & respected_mask[piece]`;
+`respected_forbidden_attackers` reads the cell mask via `index_to_xy`.
+
+**Piece cap:** added `model::MAX_PIECES = 32` (one bit per piece id in the `u32` mask). Enforced in
+`push_piece_from_piece_preset`, the roster duplicate/Add controls, and `RandomGenConfig::sanitize`
+(the random slider was already `1..=32`).
+
+**Production `time_sim` A/B** (`TIME_SIM_ITERS=25`, `TIME_SIM_WARMUP=3`; committed HEAD `1b69769`
+baseline 2 passes vs migration 3 passes, means; checksums match golden on every run; `cargo testd`
+passes 65/65):
+
+| Case | HEAD baseline | coord grid | Δ |
+| --- | ---: | ---: | ---: |
+| `knight_2_pairwise` | 3.026 | **1.833** | **−39%** |
+| `knight_3_clique` | 3.073 | **1.984** | **−35%** |
+| `leaper_4_mixed_clique` | 3.077 | **2.434** | **−21%** |
+| `king_6_clique` | 3.143 | **2.531** | **−19%** |
+| `chimera_3_clique` | 4.417 | **2.154** | **−51%** |
+
+By far the largest sim CPU win in this log — `xy_to_index` was 60–72% of place replay and is now
+gone from the hot path. `knight_*`/`chimera_*` gain most (most attacks per placement, or fewest
+respected attackers to OR); `leaper_4`/`king_6` gain less than the isolated harness predicted
+because the committed baseline still had the word-tail skip that the grid drops.
+
+**Tradeoffs (accepted):**
+- **Memory at extreme zoom:** the grid is `O((2R)²)` like the spiral words but with a larger
+  constant. At the documented max-zoom case (~67M cells, `R≈4096`) the grid is ~268 MB at `u32`
+  width; this is bounded by — and smaller than — the existing `Vec<PieceId>` occupancy (8 B/cell ≈
+  536 MB there). It grows by doubling its half-extent (`AttackGrid::grow_to`, `#[cold]`), re-laying
+  out O(log) times, then stays put; `reset` keeps the allocation and zeroes it. **The cell width is
+  now adaptive (see below), so this is ~67 MB for every built-in preset.**
+- **Worst-case scan cells/turn** rose from ~286 to ~1089 (`king_6_clique`) because a long forbidden
+  run is now single-stepped instead of word-jumped — but each step is a cheap masked grid read, and
+  the 100k-turn aggregate is far faster (above). `scan_rejection_late_game_presets_and_random` now
+  bounds the worst case at < 2000 instead of < 1000.
+- **`MAX_PIECES = 32`** cap on rosters (was effectively unbounded via manual roster add).
+
+WASM-safe (no `unsafe`/codegen tricks; identical native/wasm behavior). `src/bin/explore_coord_forbidden.rs`
+remains as the isolated A/B artifact (spiral-bitset vs coord-grid behind one scan).
+
+**Next targets still on the table:** the scan loop (`occupancy.contains_index` + `spiral_step` +
+grid read) is now the dominant sim cost on multi-army benches; `xy_to_index` only remains in the
+UI/render paths. Further sim wins would need a different placement search or occupancy
+representation, not forbidden-marking changes.
+
+## Kept (2026-05-28 — adaptive `AttackGrid` cell width)
+
+Follow-up to the coord-grid migration, targeting its memory tradeoff at extreme zoom. Each grid
+cell only ever needs one bit per **respected** attacker (the `union` of all `respected_mask`s), and
+every built-in preset uses ≤ 6 such bits. The cell type is now chosen at sim construction/reset by
+`cell_width_for(&respected_mask)`: `u8` when the union fits in 8 bits, else `u16`, else `u32`. The
+backing store is an enum `MaskCells::{U8,U16,U32}`; `at`/`record` `match` on it once (the variant is
+fixed for the sim's life, so the branch is perfectly predicted, and `record` hoists the `match` out
+of the per-cell move loop). Bits a *non-respected* attacker writes that exceed the width truncate to
+0 on store and are never read, so narrowing is checksum-exact (`narrow_cells_ignore_out_of_width_attacker_bits`,
+`cell_width_matches_highest_respected_bit`).
+
+**Effect:** for every preset the grid drops from `u32` to `u8` — **4× less memory** (the ~268 MB
+max-zoom case becomes ~67 MB).
+
+**A/B** isolating width only (forced `u32` vs adaptive `u8`; `TIME_SIM_ITERS=6`, `WARMUP=2`;
+checksums **identical** in all cases at both horizons):
+
+| Case | `u32` 1M | `u8` 1M | `u32` 5M | `u8` 5M (Δ) |
+| --- | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | 19.90 | 19.37 | 107.05 | **99.44 (−7%)** |
+| `knight_3_clique` | 23.23 | 23.45 | 123.13 | **119.62 (−3%)** |
+| `leaper_4_mixed_clique` | 25.03 | 24.19 | 135.99 | **129.17 (−5%)** |
+| `king_6_clique` | 30.75 | 30.18 | 158.11 | **156.64 (−1%)** |
+| `chimera_3_clique` | 24.35 | 24.21 | 139.15 | **128.95 (−7%)** |
+
+So the narrower cell is also slightly *faster* in the high-turn (memory) regime from better cache
+density, and neutral at 1M. WASM-safe (plain integer types, no `unsafe`). `cargo testd` 67/67.
+
+**Further memory levers not taken (diminishing / risky):** remapping respected attacker ids to
+compact bit indices (would let 32-piece rosters where few pieces are attackers also use `u8`);
+tighter grow factor than ×2 (caps waste at ~1.3–1.5× but adds reallocs that hurt *at* extreme zoom,
+the exact regime we care about). The grid is genuinely dense (the spiral fills the whole square and
+attacker stamps cover it), so sparse/windowed storage does not help.
+
+## Kept (2026-05-28 — OOM-safe advance: memory budget + fallible growth)
+
+At very high zoom-out `target_index` is enormous, so the sim used to grow `occupancy`
+(`Vec<PieceId>`, 4 B/cell on wasm), `placements` (`Vec<(u32, PieceId)>`, 8 B) and the attack grid
+roughly linearly in that index until a wasm `memory.grow` was refused — and the default allocator
+turns that into an **abort** (`handle_alloc_error` → `unreachable`), not an error. The reported
+trace bottomed out in `Simulation::step_turn` → `RawVec::grow_one` (a `placements.push`).
+
+Now the sim degrades to a partial render instead of crashing, via two layers:
+
+- **Soft budget (`MEM_BUDGET_BYTES`, field-overridable):** `footprint_bytes()` sums the three
+  structures' capacities; once it crosses the budget the sim latches `saturated` and stops
+  advancing. wasm = 1 GiB, native = 12 GiB. 1 GiB leaves headroom for the transient copy
+  `ensure_unique_for_mutation` makes of occupancy+placements (peak ≈ footprint + occ + placements).
+  The check runs at the advance loops' **existing** batch checkpoints (`advance_for_duration` 4096,
+  worker 512, `advance_to_target` 4096) — `mem_saturated()` — never per placement.
+- **Hard backstop (fallible growth):** `OccupancyGrid::insert`, `PlacementsLog::push` and
+  `AttackGrid::record` now return `bool`, growing through `try_reserve` / `try_grow_to` (which
+  return `Err`/`None` on wasm OOM rather than aborting). `place` ANDs the three; on failure it
+  latches `saturated` and reports no progress. This catches OOM exactly even between checkpoints, so
+  the soft budget needs no precise knowledge of the wasm ceiling.
+
+Saturation is surfaced as `Simulation::is_saturated()` and mirrored onto `SimDisplay.saturated` so
+the main thread sees it through the bridge (`SimulationBridge::is_saturated()`) on both native and
+wasm. `advance_*` early-return while saturated, the wasm bridge stops polling, and `viewport.rs`
+stops re-requesting advances (otherwise `needs_work` stays true forever at an unaffordable target
+and we'd request every frame). The board simply renders the region filled so far (no UI message, as
+agreed). Cleared by `reset`.
+
+**Hot-path cost — none.** The fallible reserves are guarded (`len == capacity` / `index >=
+capacity`) so they are plain pushes/resizes whenever spare capacity exists; the budget check is off
+the per-placement path entirely. Interleaved A/B (final vs pure-infallible bypass), checksums golden:
+
+| Case | 100k final | 100k bypass | 5M final | 5M bypass |
+| --- | ---: | ---: | ---: | ---: |
+| `knight_2_pairwise` | 2.04–2.19 | 2.24 | 110.97 | 108.64 |
+| `knight_3_clique` | 2.25–2.29 | 2.30 | 130.65 | 128.07 |
+| `leaper_4_mixed_clique` | 2.41–2.44 | 2.53 | 140.46 | 143.55 |
+| `king_6_clique` | 2.93–3.05 | 2.93 | 166.15 | 167.76 |
+| `chimera_3_clique` | 2.36–2.41 | 2.31 | 137.89 | 138.90 |
+
+(Within run-to-run jitter at both horizons; final is faster than bypass on several cases.) An
+earlier design that pre-reserved each structure with *extra* `Arc::make_mut` calls per placement
+regressed 22–28% at 5M — `ldar` atomics on Apple Silicon — which is why the reserve is folded into
+the single existing `make_mut` and the budget check moved to the loop checkpoints. `cargo testd`
+68/68 incl. `tiny_budget_saturates_and_renders_partial_without_crashing`. WASM-safe (no `unsafe`).
