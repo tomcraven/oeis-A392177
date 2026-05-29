@@ -2,7 +2,7 @@
   "preset": "knight_2_pairwise",
   "reference": "src/a392177_2.py logic in perf/python_reference.py",
   "rust_bin": "perf_knight2",
-  "generated_at": "2026-05-27T07:39:01.517905+00:00",
+  "generated_at": "2026-05-29T07:30:32.934461+00:00",
   "cases": [
     {
       "turns": 64,
