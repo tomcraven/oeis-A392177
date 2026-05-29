@@ -21,6 +21,7 @@ pub mod random_gen;
 pub mod render;
 pub mod share_code;
 pub mod sim;
+pub mod sim_piece_stats;
 pub mod sim_config_history;
 pub mod sim_worker;
 pub mod spiral;

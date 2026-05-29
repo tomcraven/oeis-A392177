@@ -22,6 +22,7 @@ use crate::render::{RenderCache, grid_texture_size};
 use crate::share_code::{self, ShareCapture};
 use crate::sim_config_history::{SimConfigHistory, SimConfigSnapshot};
 use crate::sim_worker::SimulationBridge;
+use crate::sim_piece_stats::piece_stat_lines;
 use crate::viewport::{self, ViewportState};
 
 /// Smoothed simulation throughput for the native Debug panel (not persisted).
@@ -103,6 +104,14 @@ pub struct SidebarSections {
     pub pieces_advanced: bool,
     #[serde(default)]
     pub debug: bool,
+    #[serde(default)]
+    pub debug_hover: bool,
+    #[serde(default)]
+    pub debug_simulation: bool,
+    #[serde(default)]
+    pub debug_piece_stats: bool,
+    #[serde(default)]
+    pub debug_viewport: bool,
     #[serde(default)]
     pub library_bookmarks: bool,
     #[serde(default)]
@@ -775,112 +784,218 @@ pub fn ui_game_definition(
                         ui_state.sidebar.debug,
                         false,
                         |ui| {
-                            ui.checkbox(
-                                &mut ui_state.show_hover_placement_path,
-                                "Show placement path on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
-                            );
-                            ui.checkbox(
-                                &mut ui_state.show_hover_attack_squares,
-                                "Show attack squares on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, highlight every square that piece attacks from its current position.",
-                            );
-                            ui.checkbox(
-                                &mut ui_state.show_hover_forbidden_skips,
-                                "Show preceding-cell info on hover",
-                            )
-                            .on_hover_text(
-                                "Over an occupied cell, show the scan that placed it: green anchor on that cell, hot pink on its previous same-piece placement, amber/cyan skips and pink lines to blockers.",
-                            );
-                            ui.checkbox(
-                                &mut ui_state.show_hover_succeeding_cell_info,
-                                "Show succeeding-cell info on hover",
-                            )
-                            .on_hover_text(
-                                "When this piece placed again later, show that scan too: orange anchor on the next same-piece placement, hot pink on the hovered cell as its previous placement, same skip colours and blocker lines.",
+                            ui_state.sidebar.debug_hover = sidebar_collapsing(
+                                ui,
+                                "debug_hover",
+                                "Board hover",
+                                ui_state.sidebar.debug_hover,
+                                false,
+                                |ui| {
+                                    ui.checkbox(
+                                        &mut ui_state.show_hover_placement_path,
+                                        "Show placement path on hover",
+                                    )
+                                    .on_hover_text(
+                                        "Over an occupied cell, draw lines linking that piece's prior placements (first to current).",
+                                    );
+                                    ui.checkbox(
+                                        &mut ui_state.show_hover_attack_squares,
+                                        "Show attack squares on hover",
+                                    )
+                                    .on_hover_text(
+                                        "Over an occupied cell, highlight every square that piece attacks from its current position.",
+                                    );
+                                    ui.checkbox(
+                                        &mut ui_state.show_hover_forbidden_skips,
+                                        "Show preceding-cell info on hover",
+                                    )
+                                    .on_hover_text(
+                                        "Over an occupied cell, show the scan that placed it: green anchor on that cell, hot pink on its previous same-piece placement, amber/cyan skips and pink lines to blockers.",
+                                    );
+                                    ui.checkbox(
+                                        &mut ui_state.show_hover_succeeding_cell_info,
+                                        "Show succeeding-cell info on hover",
+                                    )
+                                    .on_hover_text(
+                                        "When this piece placed again later, show that scan too: orange anchor on the next same-piece placement, hot pink on the hovered cell as its previous placement, same skip colours and blocker lines.",
+                                    );
+                                },
                             );
 
-                            ui.separator();
-
-                            sim_debug_stats.observe(
-                                sim.display.turn_step,
-                                time.delta_secs() as f64,
+                            ui_state.sidebar.debug_simulation = sidebar_collapsing(
+                                ui,
+                                "debug_simulation",
+                                "Simulation",
+                                ui_state.sidebar.debug_simulation,
+                                false,
+                                |ui| {
+                                    sim_debug_stats.observe(
+                                        sim.display.turn_step,
+                                        time.delta_secs() as f64,
+                                    );
+                                    let display = &sim.display;
+                                    ui.label(format!("Turn step: {}", display.turn_step));
+                                    ui.label(format!(
+                                        "Placements: {}",
+                                        display.placements.len()
+                                    ));
+                                    ui.label(format!(
+                                        "Throughput: {:.0} placements/s",
+                                        sim_debug_stats.placements_per_sec()
+                                    ));
+                                    let budget = display.mem_budget_bytes.max(1);
+                                    let pct =
+                                        100.0 * display.footprint_bytes as f64 / budget as f64;
+                                    ui.label(format!(
+                                        "Sim heap (est.): {} / {} ({pct:.1}%)",
+                                        format_byte_size(display.footprint_bytes),
+                                        format_byte_size(display.mem_budget_bytes),
+                                    ));
+                                    ui.label(format!(
+                                        "Occupancy slots: {}",
+                                        display.occupancy.cells_slice().len()
+                                    ));
+                                    ui.label(format!(
+                                        "Saturated: {}",
+                                        if display.saturated { "yes" } else { "no" }
+                                    ));
+                                    ui.label(format!(
+                                        "Worker: {}",
+                                        if sim.is_busy() { "busy" } else { "idle" }
+                                    ));
+                                    ui.label(format!(
+                                        "Needs fill: {}",
+                                        if sim.needs_work(def.as_ref(), viewport.target_index) {
+                                            "yes"
+                                        } else {
+                                            "no"
+                                        }
+                                    ));
+                                },
                             );
-                            let display = &sim.display;
-                            ui.label("Simulation");
-                            ui.label(format!("Turn step: {}", display.turn_step));
-                            ui.label(format!("Placements: {}", display.placements.len()));
-                            ui.label(format!(
-                                "Throughput: {:.0} placements/s",
-                                sim_debug_stats.placements_per_sec()
-                            ));
-                            let budget = display.mem_budget_bytes.max(1);
-                            let pct = 100.0 * display.footprint_bytes as f64 / budget as f64;
-                            ui.label(format!(
-                                "Sim heap (est.): {} / {} ({pct:.1}%)",
-                                format_byte_size(display.footprint_bytes),
-                                format_byte_size(display.mem_budget_bytes),
-                            ));
-                            ui.label(format!(
-                                "Occupancy slots: {}",
-                                display.occupancy.cells_slice().len()
-                            ));
-                            ui.label(format!(
-                                "Saturated: {}",
-                                if display.saturated { "yes" } else { "no" }
-                            ));
-                            ui.label(format!(
-                                "Worker: {}",
-                                if sim.is_busy() { "busy" } else { "idle" }
-                            ));
-                            ui.label(format!(
-                                "Needs fill: {}",
-                                if sim.needs_work(def.as_ref(), viewport.target_index) {
-                                    "yes"
-                                } else {
-                                    "no"
-                                }
-                            ));
 
-                            ui.separator();
+                            ui_state.sidebar.debug_piece_stats = sidebar_collapsing(
+                                ui,
+                                "debug_piece_stats",
+                                "Piece stats",
+                                ui_state.sidebar.debug_piece_stats,
+                                false,
+                                |ui| {
+                                    for line in piece_stat_lines(def.as_ref(), &sim.display) {
+                                        ui.horizontal(|ui| {
+                                            let rgb = line.color.to_srgba();
+                                            let (rect, _) = ui.allocate_exact_size(
+                                                egui::vec2(14.0, 14.0),
+                                                egui::Sense::hover(),
+                                            );
+                                            ui.painter().rect_filled(
+                                                rect,
+                                                2.0,
+                                                egui::Color32::from_rgba_unmultiplied(
+                                                    (rgb.red * 255.0) as u8,
+                                                    (rgb.green * 255.0) as u8,
+                                                    (rgb.blue * 255.0) as u8,
+                                                    (rgb.alpha * 255.0) as u8,
+                                                ),
+                                            );
+                                            ui.painter().rect_stroke(
+                                                rect,
+                                                2.0,
+                                                egui::Stroke::new(
+                                                    1.0,
+                                                    egui::Color32::from_gray(80),
+                                                ),
+                                                egui::StrokeKind::Inside,
+                                            );
+                                            let title = if line.enabled {
+                                                line.name.clone()
+                                            } else {
+                                                format!("{} (disabled)", line.name)
+                                            };
+                                            ui.label(egui::RichText::new(title).strong());
+                                        });
+                                        ui.indent(format!("piece_stat_{}", line.piece_id), |ui| {
+                                            ui.label(format!(
+                                                "Placements: {} ({:.1}% of board)",
+                                                line.placements,
+                                                line.placement_share_pct,
+                                            ));
+                                            ui.label(format!(
+                                                "Cells scanned: {} ({:.1}% of sim work)",
+                                                line.cells_scanned,
+                                                line.work_share_pct,
+                                            ));
+                                            if let Some(avg) = line.avg_skips_per_placement {
+                                                ui.label(format!(
+                                                    "Avg skips per placement: {avg:.1}"
+                                                ));
+                                            }
+                                            if let Some(reach) = line.spiral_reach {
+                                                let gap = line
+                                                    .avg_spiral_gap
+                                                    .map(|g| format!("{g:.1}"))
+                                                    .unwrap_or_else(|| "—".to_string());
+                                                ui.label(format!(
+                                                    "Spiral reach: {reach} · avg gap: {gap}",
+                                                ));
+                                            }
+                                        });
+                                        ui.add_space(4.0);
+                                    }
+                                },
+                            );
 
-                            if let Some(bounds) = viewport.bounds {
-                                let grid_size = grid_texture_size(bounds);
-                                ui.label(format!(
-                                    "Grid cells: {} x {}",
-                                    grid_size.x, grid_size.y
-                                ));
-                                ui.label(format!(
-                                    "Render texels: {}",
-                                    grid_size.x as u64 * grid_size.y as u64
-                                ));
-                                ui.label(format!("Target index: {}", viewport.target_index));
-                            } else {
-                                ui.label("Grid cells: pending");
-                            }
+                            ui_state.sidebar.debug_viewport = sidebar_collapsing(
+                                ui,
+                                "debug_viewport",
+                                "Viewport & render",
+                                ui_state.sidebar.debug_viewport,
+                                false,
+                                |ui| {
+                                    if let Some(bounds) = viewport.bounds {
+                                        let grid_size = grid_texture_size(bounds);
+                                        ui.label(format!(
+                                            "Grid cells: {} x {}",
+                                            grid_size.x, grid_size.y
+                                        ));
+                                        ui.label(format!(
+                                            "Render texels: {}",
+                                            grid_size.x as u64 * grid_size.y as u64
+                                        ));
+                                        ui.label(format!(
+                                            "Target index: {}",
+                                            viewport.target_index
+                                        ));
+                                    } else {
+                                        ui.label("Grid cells: pending");
+                                    }
 
-                            if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
-                                (camera_q.single(), window_q.single())
-                            {
-                                let board_width_px =
-                                    (window.width() - viewport.left_inset_px).ceil().max(1.0);
-                                let world_per_screen_px =
-                                    ortho.area.width() / board_width_px.max(1.0);
-                                let cells_per_screen_px = world_per_screen_px / CELL_SIZE;
-                                let board_pixels = board_width_px as u64
-                                    * window.height().ceil().max(1.0) as u64;
-                                ui.label(format!("Zoom scale: {:.3}", ortho.scale));
-                                ui.label(format!("Cells per px: {:.3}", cells_per_screen_px));
-                                ui.label(format!("Board pixels: {board_pixels}"));
-                                ui.label(format!(
-                                    "Left inset px: {:.0}",
-                                    viewport.left_inset_px
-                                ));
-                            }
+                                    if let (Ok((_, Projection::Orthographic(ortho), _)), Ok(window)) =
+                                        (camera_q.single(), window_q.single())
+                                    {
+                                        let board_width_px = (window.width()
+                                            - viewport.left_inset_px)
+                                            .ceil()
+                                            .max(1.0);
+                                        let world_per_screen_px =
+                                            ortho.area.width() / board_width_px.max(1.0);
+                                        let cells_per_screen_px =
+                                            world_per_screen_px / CELL_SIZE;
+                                        let board_pixels = board_width_px as u64
+                                            * window.height().ceil().max(1.0) as u64;
+                                        ui.label(format!("Zoom scale: {:.3}", ortho.scale));
+                                        ui.label(format!(
+                                            "Cells per px: {:.3}",
+                                            cells_per_screen_px
+                                        ));
+                                        ui.label(format!("Board pixels: {board_pixels}"));
+                                        ui.label(format!(
+                                            "Left inset px: {:.0}",
+                                            viewport.left_inset_px
+                                        ));
+                                    }
+                                },
+                            );
                             },
                         );
                 });

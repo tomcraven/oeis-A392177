@@ -5,12 +5,14 @@ use bevy::prelude::Resource;
 
 use crate::index_order::VisitOrder;
 use crate::model::GameDefinition;
-use crate::sim::{OccupancyGrid, Simulation};
+use crate::sim::{OccupancyGrid, PieceTally, Simulation};
 
 #[derive(Clone, Debug)]
 pub struct SimDisplay {
     pub occupancy: OccupancyGrid,
     pub cursors: Vec<u32>,
+    /// Per-piece placement aggregates for the Debug stats panel (one entry per roster piece).
+    pub piece_tally: Vec<PieceTally>,
     /// Turn-ordered log for hover placement paths (derived on the UI thread).
     pub placements: Arc<Vec<(u32, crate::model::PieceId)>>,
     pub turn_step: usize,
@@ -28,6 +30,7 @@ impl Default for SimDisplay {
         Self {
             occupancy: OccupancyGrid::default(),
             cursors: Vec::new(),
+            piece_tally: Vec::new(),
             placements: Arc::new(Vec::new()),
             turn_step: 0,
             saturated: false,
@@ -43,6 +46,7 @@ fn display_from_sim(sim: &Simulation) -> SimDisplay {
     let display = SimDisplay {
         occupancy: sim.occupancy.clone(),
         cursors: sim.cursors.clone(),
+        piece_tally: sim.piece_tally().to_vec(),
         placements: sim.placements.arc(),
         turn_step: sim.turn_step,
         saturated: sim.is_saturated(),

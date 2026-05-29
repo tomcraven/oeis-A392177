@@ -27,6 +27,19 @@ pub struct ScanSkips {
     pub occupied: Vec<u32>,
 }
 
+/// Cheap per-piece placement aggregates maintained in [`Simulation::place`] (once per placement,
+/// never in the per-cell scan loop) so the Debug stats panel needs no replay. The number of cells
+/// a piece has examined is its monotonic `cursor`, so skip counts derive from these without
+/// touching the hot loop.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PieceTally {
+    pub placements: u32,
+    /// Spiral index of this piece's first placement (smallest, since cursors are monotonic).
+    pub first_index: u32,
+    /// Spiral index of this piece's latest placement (largest seen so far).
+    pub last_index: u32,
+}
+
 fn resize_piece_vectors<T: Clone>(vec: &mut Vec<T>, len: usize, fill: T) {
     if vec.len() == len {
         vec.fill(fill);
@@ -58,6 +71,8 @@ pub struct Simulation {
     turn_order_index: usize,
     pub turn_step: usize,
     pub placements: PlacementsLog,
+    /// Per-piece placement counts and spiral reach; updated once per placement (see [`PieceTally`]).
+    piece_tally: Vec<PieceTally>,
     /// Set once a placement could not be admitted within `mem_budget_bytes` (or a real allocation
     /// failed). While saturated the sim refuses to advance, so the board renders the region filled
     /// so far instead of crashing. Cleared by [`Simulation::reset`].
@@ -166,6 +181,7 @@ impl Simulation {
             turn_order_index: 0,
             turn_step: 0,
             placements: PlacementsLog::new(),
+            piece_tally: vec![PieceTally::default(); def.pieces.len()],
             saturated: false,
             mem_budget_bytes: MEM_BUDGET_BYTES,
         }
@@ -186,9 +202,27 @@ impl Simulation {
         self.active_turn_order = active_turn_order(def);
         resize_piece_vectors(&mut self.cursors, piece_count, 0);
         resize_piece_vectors(&mut self.cursor_positions, piece_count, (0, 0));
+        resize_piece_vectors(&mut self.piece_tally, piece_count, PieceTally::default());
         self.turn_order_index = 0;
         self.turn_step = 0;
         self.placements.clear();
+    }
+
+    /// Per-piece placement aggregates for the Debug stats panel. See [`PieceTally`].
+    pub fn piece_tally(&self) -> &[PieceTally] {
+        &self.piece_tally
+    }
+
+    /// Record one successful placement in the per-piece tally (called from [`Self::place`]).
+    #[inline]
+    fn note_placement_tally(&mut self, index: u32, piece_id: PieceId) {
+        if let Some(t) = self.piece_tally.get_mut(piece_id) {
+            if t.placements == 0 {
+                t.first_index = index;
+            }
+            t.last_index = index;
+            t.placements += 1;
+        }
     }
 
     /// Set once the sim stops growing (budget reached or a real allocation failed). Callers should
@@ -251,12 +285,15 @@ impl Simulation {
             if let Some(place_start) = place_start {
                 crate::place_profile::add_place_total_ns(place_start.elapsed().as_nanos() as u64);
             }
+            self.note_placement_tally(index, piece_id);
             return true;
         }
         let ok = self.occupancy.insert(index, piece_id)
             && self.record_forbidden(def, xy, piece_id)
             && self.placements.push(index, piece_id);
-        if !ok {
+        if ok {
+            self.note_placement_tally(index, piece_id);
+        } else {
             self.saturated = true;
         }
         ok
@@ -292,6 +329,15 @@ impl Simulation {
     /// One piece takes a turn: scan from its cursor for the first legal square.
     pub fn step_turn(&mut self, def: &GameDefinition) -> bool {
         self.step_turn_scan::<false>(def, &mut 0)
+    }
+
+    pub fn active_turn_order_len(&self) -> usize {
+        self.active_turn_order.len()
+    }
+
+    /// Piece id that will scan on the next [`Self::step_turn`].
+    pub fn upcoming_piece_id(&self) -> PieceId {
+        self.active_turn_order[self.turn_order_index]
     }
 
     /// Cells the upcoming piece skips on its next scan: attacked-but-empty vs already occupied.
