@@ -2,6 +2,7 @@
 
 use bevy::asset::AssetMetaCheck;
 use bevy::camera::CameraUpdateSystems;
+#[cfg(target_family = "wasm")]
 use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use bevy_egui::{
@@ -33,29 +34,34 @@ use crate::viewport::{
 };
 
 pub fn configure_app(app: &mut App) {
-    let mut default_plugins = DefaultPlugins
-        .set(WindowPlugin {
-            primary_window: Some(Window {
-                title: "A392177".into(),
-                resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
+    let default_plugins = {
+        let plugins = DefaultPlugins
+            .set(WindowPlugin {
+                primary_window: Some(Window {
+                    title: "A392177".into(),
+                    resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
+                    ..default()
+                }),
                 ..default()
-            }),
-            ..default()
-        })
-        .set(AssetPlugin {
-            meta_check: AssetMetaCheck::Never,
-            ..default()
-        })
-        .set(ImagePlugin::default_nearest());
-
-    #[cfg(target_family = "wasm")]
-    {
-        default_plugins = default_plugins.set(LogPlugin {
-            level: Level::ERROR,
-            filter: "off".into(),
-            ..default()
-        });
-    }
+            })
+            .set(AssetPlugin {
+                meta_check: AssetMetaCheck::Never,
+                ..default()
+            })
+            .set(ImagePlugin::default_nearest());
+        #[cfg(target_family = "wasm")]
+        {
+            plugins.set(LogPlugin {
+                level: Level::ERROR,
+                filter: "off".into(),
+                ..default()
+            })
+        }
+        #[cfg(not(target_family = "wasm"))]
+        {
+            plugins
+        }
+    };
 
     app.add_plugins(default_plugins)
     .add_plugins(EguiPlugin::default())
