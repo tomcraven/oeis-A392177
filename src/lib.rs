@@ -29,5 +29,7 @@ pub mod ui;
 pub mod viewport;
 #[cfg(target_family = "wasm")]
 pub mod wasm_clipboard;
+#[cfg(target_family = "wasm")]
+pub mod wasm_url;
 
 pub const CELL_SIZE: f32 = 16.0;

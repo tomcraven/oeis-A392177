@@ -227,7 +227,7 @@ fn apply_preset_index(index: usize) -> GameDefinition {
     (catalog[i].1)()
 }
 
-fn preset_index_for_def(def: &GameDefinition) -> Option<usize> {
+pub fn preset_index_for_def(def: &GameDefinition) -> Option<usize> {
     GameDefinition::preset_catalog()
         .iter()
         .enumerate()

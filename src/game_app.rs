@@ -2,6 +2,7 @@
 
 use bevy::asset::AssetMetaCheck;
 use bevy::camera::CameraUpdateSystems;
+use bevy::log::{Level, LogPlugin};
 use bevy::prelude::*;
 use bevy_egui::{
     EguiGlobalSettings, EguiPlugin, EguiPostUpdateSet, EguiPrimaryContextPass, PrimaryEguiContext,
@@ -32,22 +33,31 @@ use crate::viewport::{
 };
 
 pub fn configure_app(app: &mut App) {
-    app.add_plugins(
-        DefaultPlugins
-            .set(WindowPlugin {
-                primary_window: Some(Window {
-                    title: "Red & Black Knights".into(),
-                    resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
-                    ..default()
-                }),
+    let mut default_plugins = DefaultPlugins
+        .set(WindowPlugin {
+            primary_window: Some(Window {
+                title: "Red & Black Knights".into(),
+                resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
                 ..default()
-            })
-            .set(AssetPlugin {
-                meta_check: AssetMetaCheck::Never,
-                ..default()
-            })
-            .set(ImagePlugin::default_nearest()),
-    )
+            }),
+            ..default()
+        })
+        .set(AssetPlugin {
+            meta_check: AssetMetaCheck::Never,
+            ..default()
+        })
+        .set(ImagePlugin::default_nearest());
+
+    #[cfg(target_family = "wasm")]
+    {
+        default_plugins = default_plugins.set(LogPlugin {
+            level: Level::ERROR,
+            filter: "off".into(),
+            ..default()
+        });
+    }
+
+    app.add_plugins(default_plugins)
     .add_plugins(EguiPlugin::default())
     .insert_resource(ClearColor(Color::srgb(0.02, 0.02, 0.05)))
     .init_resource::<GameDefinition>()
@@ -75,6 +85,9 @@ pub fn configure_app(app: &mut App) {
     #[cfg(target_family = "wasm")]
     app.init_resource::<crate::wasm_clipboard::WasmShareCodePaste>();
 
+    #[cfg(target_family = "wasm")]
+    app.init_resource::<crate::wasm_url::ShareUrlCache>();
+
     app.add_systems(
         Startup,
         (
@@ -100,6 +113,16 @@ pub fn configure_app(app: &mut App) {
     );
     #[cfg(target_family = "wasm")]
     app.add_systems(Update, crate::wasm_clipboard::poll_wasm_share_code_paste);
+    #[cfg(target_family = "wasm")]
+    app.add_systems(
+        Startup,
+        crate::wasm_url::apply_url_share_code.after(setup_sim_worker),
+    );
+    #[cfg(target_family = "wasm")]
+    app.add_systems(
+        PostUpdate,
+        crate::wasm_url::sync_share_code_to_url.after(EguiPostUpdateSet::EndPass),
+    );
     app.add_systems(
         PostUpdate,
         run_board_export.after(EguiPostUpdateSet::EndPass),
