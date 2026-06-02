@@ -6,7 +6,7 @@ Interactive visual simulator: several colored **pieces** take turns **placing** 
 
 The default preset is two knights (dark and red) that each avoid the other’s knight moves—the namesake **red & black knights** setup.
 
-Built with [Bevy](https://bevyengine.org/) and [egui](https://github.com/emilk/egui). Runs natively and in the browser (WASM).
+Built with [Bevy](https://bevyengine.org/) and [egui](https://github.com/emilk/egui). Runs natively and in the browser (WASM). **Play online:** [red_black_knights on itch.io](https://tcc.itch.io/red-black-knights) (hosted WASM build).
 
 ## How it works
 
@@ -53,7 +53,9 @@ For shipping-style native release builds, use `cargo build --release` without th
 
 ## Run in the browser (WASM)
 
-Requires `wasm-bindgen-cli` (`cargo install -f wasm-bindgen-cli`). The toolchain file already includes the `wasm32-unknown-unknown` target.
+Hosted build: **[red_black_knights on itch.io](https://tcc.itch.io/red-black-knights)**.
+
+To build and serve locally, requires `wasm-bindgen-cli` (`cargo install -f wasm-bindgen-cli`). The toolchain file already includes the `wasm32-unknown-unknown` target.
 
 ```bash
 ./web/serve.sh
