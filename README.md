@@ -17,6 +17,16 @@ Built with [Bevy](https://bevyengine.org/) and [egui](https://github.com/emilk/e
 
 You can mix piece types, cliques (everyone blocks everyone), pairwise setups, random generators, and shareable game definitions from the UI.
 
+## Examples
+
+Here's some examples:
+
+![](src/test-data/screenshot_sharecodes_4.png)
+![](src/test-data/screenshot_sharecodes_0.png)
+![](src/test-data/screenshot_sharecodes_1.png)
+![](src/test-data/screenshot_sharecodes_2.png)
+![](src/test-data/screenshot_sharecodes_3.png)
+
 ## Run locally (native)
 
 This repo defines dev aliases in `.cargo/config.toml` that enable Bevy dynamic linking for faster iteration:
@@ -78,6 +88,7 @@ Place-level sim profiling uses the `place_profile` feature and `profile_place` b
 | `src/discover.rs` | Offline discovery runs and PNG export |
 | `docs/SIMULATION.md` | How placement simulation and forbidden storage work |
 | `docs/OPTIMISATION.md` | Performance guardrails, timings, experiments |
+| `src/test-data/` | Share-code fixtures and golden board PNGs (see **Examples**) |
 
 ## Performance notes
 
