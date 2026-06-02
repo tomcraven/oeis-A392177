@@ -471,7 +471,7 @@ pub fn ui_game_definition(
                 .stick_to_bottom(true)
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    ui.heading("Red & Black Knights");
+                    ui.heading("A392177");
                     ui_state.sidebar.view = sidebar_collapsing(
                         ui,
                         "view",

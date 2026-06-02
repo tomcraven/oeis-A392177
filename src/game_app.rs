@@ -36,7 +36,7 @@ pub fn configure_app(app: &mut App) {
     let mut default_plugins = DefaultPlugins
         .set(WindowPlugin {
             primary_window: Some(Window {
-                title: "Red & Black Knights".into(),
+                title: "A392177".into(),
                 resolution: (WINDOW_WIDTH as u32, WINDOW_HEIGHT as u32).into(),
                 ..default()
             }),

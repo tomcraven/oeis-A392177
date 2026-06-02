@@ -1,8 +1,8 @@
 # This entire codebase was almost entirely written with various different LLMs
 
-## Red & Black Knights
+## A392177
 
-Interactive visual simulator: several colored **pieces** take turns **placing** tokens on an infinite board indexed by a **square spiral**. Each piece uses a chess-like **attack pattern** (knight, wazir, ferz, gnu, chimera, and others). Placements are blocked on occupied cells and on squares “attacked” by pieces you configure to respect. The result is turn-by-turn growth of intricate, often fractal-looking color patterns—not a capture-based chess game, but a constraint puzzle on spiral order.
+Interactive visual simulator for the spiral placement problem from [OEIS A392177](https://oeis.org/A392177): several colored **pieces** take turns **placing** tokens on an infinite board indexed by a **square spiral**. Each piece uses a chess-like **attack pattern** (knight, wazir, ferz, gnu, chimera, and others). Placements are blocked on occupied cells and on squares “attacked” by pieces you configure to respect. The result is turn-by-turn growth of intricate, often fractal-looking color patterns—not a capture-based chess game, but a constraint puzzle on spiral order.
 
 The default preset is two knights (dark and red) that each avoid the other’s knight moves—the namesake **red & black knights** setup.
 

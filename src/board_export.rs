@@ -219,7 +219,7 @@ fn begin_async_save_dialog(
 ) {
     let mut builder = rfd::AsyncFileDialog::new()
         .set_title("Export board as PNG")
-        .set_file_name("red_black_knights_board.png");
+        .set_file_name("a392177_board.png");
 
     if let Some(dir) = dirs::download_dir().or_else(dirs::home_dir) {
         builder = builder.set_directory(dir);
